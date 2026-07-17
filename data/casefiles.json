@@ -9,7 +9,7 @@
       "os": "Windows AD",
       "platform": "HackTheBox",
       "status": "active",
-      "published": true,
+      "published": false,
       "file": "writeups/hercules.html",
       "tags": [
         "Blind LDAP Injection",
