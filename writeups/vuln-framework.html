@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Vulnerability Exploitation Framework</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../projects.html">&larr; Back to Projects</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Project · Automation</span>
+  <h1>Vulnerability Exploitation Framework</h1>
+  <div class="subtitle">Automated Pentesting Toolkit — Python, Bash, YAML</div>
+  <div class="tags">
+    <span class="tag">sqlmap</span>
+    <span class="tag">Dalfox</span>
+    <span class="tag">Nuclei</span>
+    <span class="tag">ParamSpider</span>
+    <span class="tag">LFImap</span>
+  </div>
+<div class="chain">
+    <span class="node">Parameter Discovery</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Auto-Routing</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Module Execution</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Reporting</span>
+  </div>
+
+  <a class="repo-link" href="https://github.com/logicalerror1/Vulnerability_Exploitation" target="_blank" rel="noopener">&#8599; View source on GitHub</a>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Problem</h2></div>
+    <p>Manual pentesting workflows repeat the same sequence for every target — discover parameters, decide which vulnerability classes are plausible, run the matching tool, then write up findings. Doing this by hand across a large parameter surface doesn't scale.</p>
+    <div class="why"><strong>Why this mattered</strong>The goal wasn't to replace manual testing judgment, but to remove the repetitive triage work so more time goes to the parts that actually need a human — verifying findings and chaining them.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Design</h2></div>
+    <p>The framework centers on an execution engine that coordinates scanning and exploitation modules, with <strong>ParamSpider</strong> handling automated parameter discovery across a target's attack surface.</p>
+    <div class="why"><strong>Why this mattered</strong>Centralizing orchestration in one engine (rather than a loose collection of shell scripts) made it possible to add authenticated scanning and new modules later without rewriting the discovery layer.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Implementation</h2></div>
+    <p>Auto-routing logic maps each discovered parameter to the appropriate vulnerability module — SQLi, XSS, LFI, SSRF, or IDOR — and dispatches it to the matching integrated tool: <strong>sqlmap</strong> for SQLi, <strong>Dalfox</strong> for XSS, <strong>LFImap</strong> for LFI, and <strong>Nuclei</strong> for broader template-based scanning. Custom scanners handle SSRF and IDOR, which don't have a strong off-the-shelf tool with the same detection tailoring. Authenticated scanning is supported through session handling and login automation so restricted areas of an app aren't skipped.</p>
+    <div class="why"><strong>Why this mattered</strong>SSRF and IDOR needed custom detection logic because generic scanners produce too many false positives on these classes — a tailored check on response behavior gave more reliable signal than a one-size-fits-all payload list.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Result</h2></div>
+    <p>The framework outputs structured HTML reports with findings and supporting evidence, turning a raw scan run into something that reads like an actual engagement deliverable rather than a wall of tool logs.</p>
+    <div class="why"><strong>Why this mattered</strong>Reporting was treated as a first-class part of the pipeline, not an afterthought — a scan result nobody can read quickly is a scan result nobody acts on.</div>
+
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+</body>
+</html>

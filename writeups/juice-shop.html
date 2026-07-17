@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — OWASP Juice Shop Pentesting</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../projects.html">&larr; Back to Projects</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Project · Web Pentesting</span>
+  <h1>OWASP Juice Shop Pentesting</h1>
+  <div class="subtitle">OWASP Top 10 assessment</div>
+  <div class="tags">
+    <span class="tag">Burp Suite</span>
+    <span class="tag">OWASP Top 10</span>
+    <span class="tag">CVSS Scoring</span>
+  </div>
+<div class="chain">
+    <span class="node">Recon</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Exploitation</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Impact Assessment</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Reporting</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Problem</h2></div>
+    <p>OWASP Juice Shop is an intentionally vulnerable web app covering the OWASP Top 10. The goal was to treat it as a real assessment target rather than a scavenger hunt — producing findings the way a client engagement would expect.</p>
+    <div class="why"><strong>Why this mattered</strong>Juice Shop is popular enough that solutions are easy to find online — doing it as a proper assessment with real reporting, instead of just collecting flags, is what makes it useful practice.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Design</h2></div>
+    <p>Testing was done with Burp Suite as the primary interception and manipulation tool, working through the application's flows systematically rather than jumping straight to known Juice Shop challenge hints.</p>
+    <div class="why"><strong>Why this mattered</strong>Working through the app's actual user flows (registration, checkout, admin panel) surfaces vulnerabilities in the order a real attacker would find them, which is better practice than targeting known challenge IDs directly.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Implementation</h2></div>
+    <p>Multiple vulnerability classes from the OWASP Top 10 were identified and exploited across the application, each investigated for root cause rather than just triggering the vulnerable state.</p>
+    <div class="why"><strong>Why this mattered</strong>Understanding the root cause of each finding — not just the trigger — is what makes the resulting report's mitigation advice actually specific and useful rather than generic boilerplate.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Result</h2></div>
+    <p>Findings were compiled into CVSS-scored reports with mitigation strategies for each vulnerability, mirroring the deliverable format expected from a professional penetration test.</p>
+    <div class="why"><strong>Why this mattered</strong>Scoring findings with CVSS forces a consistent, defensible severity ranking instead of a gut-feel 'this seems bad' — the same discipline expected in real engagement reports.</div>
+
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+</body>
+</html>

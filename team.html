@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Team — Mohamed Adel Refaat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .role-card.team-card{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    text-align:center;
+    gap:18px;
+    padding:32px 24px 28px;
+  }
+  .team-logo-frame{
+    width:200px;height:200px;
+    border-radius:20px;
+    padding:6px;
+    background:conic-gradient(from 220deg, var(--brass), var(--rust) 35%, var(--brass) 70%, var(--rust-dark) 100%);
+    box-shadow:0 14px 34px rgba(0,0,0,0.45);
+    transform:rotate(-2deg);
+    transition:transform .3s ease;
+  }
+  .team-logo-frame:hover{transform:rotate(0deg) scale(1.02);}
+  .team-logo-frame img{
+    width:100%;height:100%;
+    border-radius:15px;
+    object-fit:cover;
+    display:block;
+    border:3px solid var(--bg);
+  }
+  .team-card-body{max-width:420px;}
+  .team-card-body p{margin-top:6px;}
+  @media (max-width:520px){
+    .team-logo-frame{width:150px;height:150px;}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html">Dossier</a>
+  <a href="case-files.html">Case Files</a>
+  <a href="projects.html">Projects</a>
+  <a href="blog.html">Blog</a>
+  <a href="team.html" class="active">Team</a>
+  <a href="contact.html">Contact</a>
+</nav>
+
+<section class="page-head">
+  <div class="stamp-row">
+    <span class="case-no">FILE NO. MAR-2026-004 / TEAM</span>
+  </div>
+  <h1 class="name">Team</h1>
+  <div class="role">H4ckli3ns</div>
+</section>
+
+<section id="team" style="padding-top:24px;">
+  <div class="roles">
+    <div class="role-card team-card">
+      <div class="team-logo-frame">
+        <img src="assets/img/h4ckli3ns-logo.jpg" alt="H4ckli3ns team logo">
+      </div>
+      <div class="team-card-body">
+        <span class="r-tag">TEAM</span>
+        <h3>H4ckli3ns</h3>
+        <p>The CTF team I compete with, playing across web exploitation and Active Directory
+        attack-chain challenges.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="mini-footer">
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+  &nbsp;·&nbsp;
+  <a href="contact.html">Open a case →</a>
+</div>
+
+</body>
+</html>

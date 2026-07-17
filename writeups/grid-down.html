@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Grid Down</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">CTF Challenge · Web / Infra</span>
+  <h1>Grid Down</h1>
+  <div class="subtitle">Challenge design — ANU CTF, based on CVE-2021-41773</div>
+  <div class="tags">
+    <span class="tag">Apache 2.4.49</span>
+    <span class="tag">Path Traversal</span>
+    <span class="tag">CGI RCE</span>
+  </div>
+<div class="chain">
+    <span class="node">Path Traversal</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Arbitrary File Read</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">CGI Misconfig</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">RCE</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Problem</h2></div>
+    <p>CVE-2021-41773 is a path traversal flaw in Apache HTTP Server 2.4.49 caused by an incomplete fix to the path-normalization logic, letting encoded traversal sequences like <code>%2e%2e/</code> escape the web root. The goal was to package this as a self-contained, story-driven challenge (a fictional power-grid control panel) rather than a bare vulnerable-VM download.</p>
+    <div class="why"><strong>Why this mattered</strong>Wrapping a real CVE in a themed scenario keeps the challenge grounded in an actual historical vulnerability class solvers may meet again in the field, while giving it a narrative hook that makes the CTF more engaging than a plain 'exploit this CVE' prompt.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Design</h2></div>
+    <p>The vulnerable Apache 2.4.49 instance serves a mock 'grid control' web app. Path traversal alone grants arbitrary file read; on hosts where <code>mod_cgi</code> is enabled, the same traversal flaw escalates to remote code execution by reaching the cgi-bin path.</p>
+    <div class="why"><strong>Why this mattered</strong>Including both the file-read and the RCE escalation path let the challenge serve two difficulty tiers from one environment — an easier flag reachable via file read, and a harder flag requiring the full RCE chain.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Implementation</h2></div>
+    <p>The environment was containerized with the specific vulnerable Apache version pinned, <code>mod_cgi</code> enabled intentionally, and a themed file structure (fake 'grid schematics' and credentials) planted to reward the file-read stage before the RCE stage.</p>
+    <div class="why"><strong>Why this mattered</strong>Pinning the exact vulnerable version rather than 'latest' matters here — later Apache patches closed this exact traversal path, so version drift would silently break the challenge.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Result</h2></div>
+    <p>Solvers who reach the file-read stage recover the first flag from the planted schematics files; solvers who chain through to CGI execution recover a second, harder flag from a root-only file.</p>
+    <div class="why"><strong>Why this mattered</strong>Layering two flags behind one vulnerability class rewarded partial progress instead of an all-or-nothing solve, which kept less experienced competitors engaged instead of scoring zero.</div>
+
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Secure Authentication System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../projects.html">&larr; Back to Projects</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Project · Web Security</span>
+  <h1>Secure Authentication System</h1>
+  <div class="subtitle">Sentinel Hub — Flask 2FA &amp; Role-Based Access Control</div>
+  <div class="tags">
+    <span class="tag">Flask</span>
+    <span class="tag">bcrypt</span>
+    <span class="tag">TOTP / 2FA</span>
+    <span class="tag">RBAC</span>
+    <span class="tag">SQLite</span>
+  </div>
+
+<div class="chain">
+    <span class="node">Password Hashing</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">TOTP 2FA</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Session Tokens</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Role-Based Routing</span>
+  </div>
+
+  <a class="repo-link" href="https://github.com/MohamedBurrito/-Secure-Authentication-System" target="_blank" rel="noopener">&#8599; View source on GitHub</a>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Problem</h2></div>
+    <p>Built for a Data Integrity and Authentication course assignment: implement a complete, real-world secure web authentication system rather than a bare login form — covering password storage, a second authentication factor, session protection, and enforced access control across distinct user roles.</p>
+    <div class="why"><strong>Why this mattered</strong>Authentication is one of the few areas of a web app where a shortcut isn't just a bug — plaintext passwords, missing 2FA, or unenforced role checks are each, on their own, a full account-takeover or privilege-escalation path.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Design</h2></div>
+    <p>The system is a Flask app backed by SQLite, with registration collecting name, email, password, and one of exactly three roles — <strong>Admin</strong>, <strong>Manager</strong>, and <strong>User</strong> — each mapped to a distinct set of accessible routes rather than a single flat permission flag.</p>
+    <div class="why"><strong>Why this mattered</strong>Modeling roles as first-class, route-scoped permissions from the start (rather than bolting on an <code>is_admin</code> boolean later) keeps the access-control logic centralized and easier to audit.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Implementation — Hashing, 2FA, and Sessions</h2></div>
+    <p>Passwords are hashed with <strong>flask-bcrypt</strong> and never stored in plaintext. On top of that, <strong>pyotp</strong> generates a per-user TOTP secret compatible with Google Authenticator, rendered as a scannable QR code via <strong>PyQRCode</strong> during enrollment. After a successful password check and TOTP verification, a secure session token is issued to track the authenticated user for all subsequent requests.</p>
+    <div class="why"><strong>Why this mattered</strong>Layering TOTP on top of hashed passwords means a leaked or guessed password alone isn't enough to authenticate — the attacker also needs the physical/app-based second factor, which is the entire point of 2FA.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Implementation — Enforcing Role-Based Access</h2></div>
+    <p>Each protected route checks the authenticated session's role before rendering: Admins get full user management (view, update roles, delete), Managers get read-only access to reports, and standard Users are limited to their own dashboard and profile. Unauthorized access attempts — a User requesting an admin-only route, for example — are strictly blocked with a custom 403/404 response rather than silently redirecting.</p>
+    <div class="why"><strong>Why this mattered</strong>Access control has to be enforced server-side on every request, not just hidden in the UI — a User who guesses or bookmarks an admin URL should hit an explicit denial, not a page that happens to render blank.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Result</h2></div>
+    <p>The finished system covers registration, hashed-password login, TOTP-based 2FA enrollment and verification, session-token protected routing, and strictly enforced RBAC across three roles, with a clean dark-mode UI on top of a modular Python/Flask backend.</p>
+    <div class="why"><strong>Why this mattered</strong>Treating this as a small, real authentication system — not just an assignment checklist — meant every piece (hashing, 2FA, sessions, RBAC) had to actually interlock correctly rather than working in isolation.</div>
+
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+</body>
+</html>

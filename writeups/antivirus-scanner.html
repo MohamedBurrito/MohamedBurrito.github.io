@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Lightweight Antivirus Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav>
+
+<div class="topbar">
+  <a class="back" href="../projects.html">&larr; Back to Projects</a>
+  <span class="case-no">FILE NO. 2026-302</span>
+</div>
+
+<main>
+  <span class="file-tab">Project · Defensive Tooling</span>
+  <h1>Lightweight Antivirus Scanner</h1>
+  <div class="subtitle">Python Malware Scanner</div>
+  <div class="tags">
+    <span class="tag">SHA-256</span>
+    <span class="tag">Signature Detection</span>
+    <span class="tag">Heuristics</span>
+  </div>
+<div class="chain">
+    <span class="node">Directory Walk</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Hash Match</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Heuristic Check</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Alert Log</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Problem</h2></div>
+    <p>Most introductory malware-scanner projects stop at a hardcoded hash list. The goal here was to build something closer to how a real lightweight scanner behaves — recursive, with both signature and heuristic detection, and actual logging.</p>
+    <div class="why"><strong>Why this mattered</strong>Building the defensive side of tooling, even a simple version, sharpens intuition for what an offensive payload needs to evade — a useful complement to the exploitation-focused work.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Design</h2></div>
+    <p>The scanner recursively walks a target directory tree, computing a SHA-256 hash for each file and comparing it against a maintained list of known-malicious hashes.</p>
+    <div class="why"><strong>Why this mattered</strong>SHA-256 was chosen over faster, weaker hashes because signature-based detection is only as trustworthy as its collision resistance — a scanner is worthless if hashes can be trivially forged to evade it.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Implementation</h2></div>
+    <p>Alongside exact hash matches, simple heuristic checks flag suspicious characteristics that don't rely on a known signature, catching some variants that a pure hash list would miss.</p>
+    <div class="why"><strong>Why this mattered</strong>Signature-only detection fails against anything even slightly modified from a known sample — heuristics are what let the scanner catch minor variants without needing an updated hash for every single one.</div>
+
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Result</h2></div>
+    <p>Every scan produces an alert log recording what was flagged and why, giving a reviewable trail rather than a silent pass/fail.</p>
+    <div class="why"><strong>Why this mattered</strong>Logging the reasoning behind each flag (hash match vs. heuristic) makes false positives easier to diagnose and tune later.</div>
+
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+</body>
+</html>
