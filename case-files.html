@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case Files — Mohamed Adel Refaat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<nav>
+  <a href="index.html">Dossier</a>
+  <a href="case-files.html" class="active">Case Files</a>
+  <a href="projects.html">Projects</a>
+  <a href="blog.html">Blog</a>
+  <a href="team.html">Team</a>
+  <a href="contact.html">Contact</a>
+</nav>
+
+<section class="page-head">
+  <div class="stamp-row">
+    <span class="case-no">FILE NO. MAR-2026-004 / CASE-FILES</span>
+  </div>
+  <h1 class="name">Case Files</h1>
+  <div class="role">Machine &amp; CTF Write-ups</div>
+</section>
+
+<section id="case-files" style="padding-top:24px;max-width:1600px;">
+  <p style="color:var(--muted);font-size:0.87rem;margin-top:-4px;margin-bottom:26px;max-width:640px;">
+    Full write-ups are published only once a machine is officially retired, per platform terms.
+    Active machines below are named and categorized, with exploitation detail redacted until retirement.
+  </p>
+
+  <div class="toggle-bar" role="tablist" aria-label="Choose case file type">
+    <button class="toggle-btn active" data-view="machine">Machine Write-ups</button>
+    <button class="toggle-btn" data-view="ctf">CTF Write-ups</button>
+  </div>
+
+  <div class="filter-bar" id="diff-filter" role="tablist" aria-label="Filter by difficulty">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="easy">Easy</button>
+    <button class="filter-btn" data-filter="medium">Medium</button>
+    <button class="filter-btn" data-filter="hard">Hard</button>
+    <button class="filter-btn" data-filter="insane">Insane</button>
+  </div>
+
+  <div class="files" id="files-grid">
+    <!-- Rendered dynamically by assets/casefiles-loader.js from data/casefiles.json -->
+  </div>
+</section>
+
+<div class="mini-footer">
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+  &nbsp;·&nbsp;
+  <a href="contact.html">Open a case →</a>
+</div>
+
+<script src="assets/casefiles-loader.js"></script>
+<script>
+  const toggleBtns = document.querySelectorAll('.toggle-btn');
+  const filterBar = document.getElementById('diff-filter');
+  const filterBtns = filterBar.querySelectorAll('.filter-btn');
+  let currentView = 'machine';
+  let currentDiff = 'all';
+
+  function applyView(){
+    const allCards = document.querySelectorAll('#files-grid .file');
+    allCards.forEach(card => {
+      const matchesView = card.dataset.view === currentView;
+      const matchesDiff = currentView !== 'machine' || currentDiff === 'all' || card.dataset.diff === currentDiff;
+      card.hidden = !(matchesView && matchesDiff);
+    });
+  }
+
+  toggleBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      toggleBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentView = btn.dataset.view;
+      filterBar.style.display = (currentView === 'machine') ? 'flex' : 'none';
+      applyView();
+    });
+  });
+
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      filterBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentDiff = btn.dataset.filter;
+      applyView();
+    });
+  });
+
+  // Cards are rendered async from data/casefiles.json — apply the current
+  // view/filter once the loader dispatches this event, not just on page load.
+  document.addEventListener('casefiles:rendered', applyView);
+  applyView();
+</script>
+
+</body>
+</html>
