@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projects — Mohamed Adel Refaat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .proj-clickable{cursor:pointer;}
+  .proj-clickable:hover h3{color:var(--brass);}
+  .proj-clickable:focus-visible{outline:2px solid var(--brass);outline-offset:3px;}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html">Dossier</a>
+  <a href="case-files.html">Case Files</a>
+  <a href="projects.html" class="active">Projects</a>
+  <a href="blog.html">Blog</a>
+  <a href="team.html">Team</a>
+  <a href="contact.html">Contact</a>
+</nav>
+
+<section class="page-head">
+  <div class="stamp-row">
+    <span class="case-no">FILE NO. MAR-2026-004 / PROJECTS</span>
+  </div>
+  <h1 class="name">Projects</h1>
+  <div class="role">Tooling &amp; Applied Assessments</div>
+</section>
+
+<section id="projects" style="padding-top:24px;">
+  <div class="projects">
+    <div class="proj proj-clickable" data-href="writeups/vuln-framework.html" tabindex="0" role="link">
+      <h3>Vulnerability Exploitation Framework</h3>
+      <div class="stack">Python · Bash · YAML — sqlmap, Dalfox, Nuclei, ParamSpider, LFImap</div>
+      <ul>
+        <li>Modular automated pentesting framework with a central execution engine</li>
+        <li>Auto-routing from discovered parameters to the matching vulnerability module (SQLi, XSS, LFI, SSRF, IDOR)</li>
+        <li>Authenticated scanning via session handling and login automation</li>
+        <li>HTML reporting system for structured findings and evidence</li>
+      </ul>
+    </div>
+    <div class="proj proj-clickable" data-href="writeups/antivirus-scanner.html" tabindex="0" role="link">
+      <h3>Lightweight Antivirus Scanner</h3>
+      <div class="stack">Python — SHA-256 signature matching</div>
+      <ul>
+        <li>Signature-based malware scanner with heuristic checks</li>
+        <li>Recursive directory scanning with alert log generation</li>
+      </ul>
+    </div>
+    <div class="proj proj-clickable" data-href="writeups/juice-shop.html" tabindex="0" role="link">
+      <h3>OWASP Juice Shop Pentesting</h3>
+      <div class="stack">Burp Suite · OWASP Top 10</div>
+      <ul>
+        <li>Identified and exploited multiple OWASP Top 10 vulnerability classes</li>
+        <li>Delivered CVSS-scored reports with mitigation strategies</li>
+      </ul>
+    </div>
+    <div class="proj proj-clickable" data-href="writeups/secure-auth-system.html" tabindex="0" role="link">
+      <h3>Secure Authentication System</h3>
+      <div class="stack">Python · Flask · SQLite — bcrypt, pyotp, PyQRCode</div>
+      <ul>
+        <li>Password hashing with flask-bcrypt — no plaintext credential storage</li>
+        <li>Google Authenticator-compatible TOTP 2FA with QR-code enrollment</li>
+        <li>Secure session-token authentication protecting all routes</li>
+        <li>Strict role-based access control across Admin / Manager / User roles</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="mini-footer">
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+  &nbsp;·&nbsp;
+  <a href="contact.html">Open a case →</a>
+</div>
+
+<script>
+  document.querySelectorAll('.proj-clickable').forEach(card => {
+    card.addEventListener('click', () => {
+      if (card.dataset.href) window.location.href = card.dataset.href;
+    });
+    card.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && card.dataset.href) {
+        e.preventDefault();
+        window.location.href = card.dataset.href;
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
