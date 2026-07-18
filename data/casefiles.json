@@ -168,7 +168,7 @@
       "difficulty": "medium",
       "os": "Linux",
       "platform": "HackTheBox",
-      "status": "active",
+      "status": "retired",
       "published": true,
       "file": "writeups/abducted.html",
       "tags": [
@@ -220,7 +220,7 @@
       "difficulty": "easy",
       "os": "Linux",
       "platform": "HackTheBox",
-      "status": "active",
+      "status": "retired",
       "published": true,
       "file": "writeups/cctv.html",
       "tags": [
