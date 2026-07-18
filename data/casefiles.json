@@ -356,8 +356,8 @@
       "difficulty": "medium",
       "os": "Windows AD",
       "platform": "HackTheBox",
-      "status": "active",
-      "published": false,
+      "status": "retired",
+      "published": true,
       "file": "writeups/logging.html",
       "tags": [
         "SMB Log Leak",
