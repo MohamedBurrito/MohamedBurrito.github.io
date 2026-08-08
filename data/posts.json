@@ -1,0 +1,7 @@
+{
+  "_comment": "List of markdown filenames (in blog/posts/) for blog-loader.js to fetch and render on blog.html / blog/post.html. Add new posts here.",
+  "posts": [
+    "2026-07-16-welcome.md",
+    "2026-08-09-trickbot-malware-analysis.md"
+  ]
+}
