@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blog — Mohamed Adel Refaat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  /* ---------- Blog post cards (reuses the site's paper "file" look, simplified) ---------- */
+  .posts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:22px;}
+  .post{
+    background:var(--bg-alt);
+    border:1px solid var(--panel-line);
+    border-left:3px solid var(--brass);
+    padding:22px;border-radius:3px;
+  }
+  .post .post-date{font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--rust);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px;display:block;}
+  .post h3{font-family:'Special Elite',monospace;font-size:1.1rem;margin:0 0 8px;color:var(--paper);}
+  .post p{font-size:0.9rem;color:var(--text);margin:0;}
+  .post-clickable{cursor:pointer;}
+  .post-clickable:hover h3{color:var(--brass);}
+  .post-clickable:focus-visible{outline:2px solid var(--brass);outline-offset:3px;}
+
+  .empty-state{
+    border:1px dashed var(--panel-line);
+    border-radius:4px;
+    padding:40px 24px;
+    text-align:center;
+    color:var(--muted);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.85rem;
+  }
+  .empty-state strong{color:var(--text);display:block;font-family:'Special Elite',monospace;font-size:1.05rem;margin-bottom:8px;}
+
+  /* ---------- Featured report card (static entry, not part of the Markdown post feed) ---------- */
+  .featured-label{
+    font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--muted);
+    letter-spacing:0.08em;text-transform:uppercase;margin:0 0 12px;
+  }
+  .featured{
+    display:block;text-decoration:none;
+    background:var(--bg-alt);
+    border:1px solid var(--panel-line);
+    border-left:3px solid var(--rust);
+    padding:24px;border-radius:3px;
+    margin-bottom:34px;
+    transition:border-color .2s ease;
+  }
+  .featured:hover{border-left-color:var(--brass);}
+  .featured:hover h3{color:var(--brass);}
+  .featured .post-date{font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--rust);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:8px;display:block;}
+  .featured h3{font-family:'Special Elite',monospace;font-size:1.25rem;margin:0 0 8px;color:var(--paper);}
+  .featured p{font-size:0.92rem;color:var(--text);margin:0 0 14px;}
+  .featured .tags{display:flex;gap:6px;flex-wrap:wrap;}
+  .featured .tag{
+    font-family:'IBM Plex Mono',monospace;font-size:0.66rem;
+    background:var(--bg);border:1px solid var(--panel-line);
+    padding:3px 9px;border-radius:2px;color:var(--text);
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html">Dossier</a>
+  <a href="case-files.html">Case Files</a>
+  <a href="projects.html">Projects</a>
+  <a href="blog.html" class="active">Blog</a>
+  <a href="team.html">Team</a>
+  <a href="contact.html">Contact</a>
+</nav>
+
+<section class="page-head">
+  <div class="stamp-row">
+    <span class="case-no">FILE NO. MAR-2026-004 / BLOG</span>
+  </div>
+  <h1 class="name">Blog</h1>
+  <div class="role">Notes &amp; Write-ups</div>
+</section>
+
+<section id="blog" style="padding-top:24px;">
+
+  <!-- Static featured entry — a hand-built case-file page, not part of the Markdown post feed -->
+  <div class="featured-label">Featured Report</div>
+  <a class="featured" href="blog/trickbot-malware-analysis.html">
+    <span class="post-date">6 August 2026</span>
+    <h3>TrickBot Malware Analysis</h3>
+    <p>Full static, dynamic, code-level (Ghidra), and memory forensics analysis of a TrickBot sample — CryptoAPI unpacking, process hollowing into svchost.exe, HKCU persistence, live C2 config decryption via x64dbg, and a YARA detection rule.</p>
+    <div class="tags">
+      <span class="tag">Malware Analysis</span>
+      <span class="tag">Ghidra</span>
+      <span class="tag">Memory Forensics</span>
+      <span class="tag">YARA</span>
+    </div>
+  </a>
+
+  <!--
+    Posts are rendered dynamically from Markdown files in blog/posts/,
+    listed in data/posts.json. To add a post, use admin.html or drop a
+    .md file into blog/posts/ and list its filename in data/posts.json.
+  -->
+  <div class="posts">
+  </div>
+
+  <div class="empty-state" style="display:none;">
+    <strong>No posts yet</strong>
+    Longer-form notes and write-ups will land here first.
+  </div>
+
+</section>
+
+<div class="mini-footer">
+  <a href="mailto:burritosec51@gmail.com">burritosec51@gmail.com</a>
+  &nbsp;·&nbsp;
+  <a href="contact.html">Open a case →</a>
+</div>
+
+<script>
+  window.BLOG_PATHS = { postsDir: 'blog/posts/', manifest: 'data/posts.json', postViewer: 'blog/post.html' };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="assets/blog-loader.js"></script>
+
+</body>
+</html>
