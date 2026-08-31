@@ -366,22 +366,6 @@
         "ADCS ESC17"
       ],
       "summary": "A credential leaked in an SMB-hosted sync log chained through Shadow Credentials and a scheduled-task DLL hijack into a rogue-WSUS ADCS abuse for SYSTEM."
-    },
-    {
-      "slug": "polluted-logs",
-      "title": "Polluted Logs",
-      "view": "ctf",
-      "difficulty": "n/a",
-      "os": "Web",
-      "platform": "Authored — ANU CTF",
-      "status": "retired",
-      "published": false,
-      "file": "writeups/polluted-logs.html",
-      "tags": [
-        "Node.js",
-        "Prototype Pollution"
-      ],
-      "summary": "A Node.js prototype pollution challenge built from the ground up, including the vulnerable service and intended exploit path."
     }
   ]
 }
