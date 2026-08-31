@@ -382,23 +382,6 @@
         "Prototype Pollution"
       ],
       "summary": "A Node.js prototype pollution challenge built from the ground up, including the vulnerable service and intended exploit path."
-    },
-    {
-      "slug": "grid-down",
-      "title": "Grid Down",
-      "view": "ctf",
-      "difficulty": "n/a",
-      "os": "Web / Infra",
-      "platform": "Authored — ANU CTF",
-      "status": "retired",
-      "published": false,
-      "file": "writeups/grid-down.html",
-      "tags": [
-        "Apache 2.4.49",
-        "Path Traversal",
-        "RCE"
-      ],
-      "summary": "Path traversal / RCE challenge modeled on CVE-2021-41773, built as an infrastructure-themed target for competition play."
     }
   ]
 }
