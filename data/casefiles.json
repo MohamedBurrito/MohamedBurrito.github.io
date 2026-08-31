@@ -28,7 +28,7 @@
       "os": "Linux",
       "platform": "HackTheBox",
       "status": "active",
-      "published": false,
+      "published": true,
       "file": "writeups/cobblestone.html",
       "tags": [
         "SQL Injection",
