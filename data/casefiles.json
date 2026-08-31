@@ -238,7 +238,7 @@
       "os": "Linux",
       "platform": "HackTheBox",
       "status": "active",
-      "published": false,
+      "published": true,
       "file": "writeups/kobold.html",
       "tags": [
         "Unauthenticated RCE",
