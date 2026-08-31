@@ -340,7 +340,7 @@
       "os": "Linux",
       "platform": "HackTheBox",
       "status": "active",
-      "published": false,
+      "published": true,
       "file": "writeups/helix.html",
       "tags": [
         "Apache NiFi RCE",
